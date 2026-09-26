@@ -74,6 +74,10 @@ and description are required; *Fill from website* drafts the rest. Changing the 
 With a collaboration tracker imported, the profile shows a **check against your history**: how many past partners
 Scout found and where they rank.
 
+**Two looks.** *Modern* (the default): clean and white, bold type, orange buttons and big rounded creator images.
+*Classic*: the playful original with the comic font and poster cards. Switch with *Modern | Classic* in the top bar;
+everything else works the same in both.
+
 **Searching.** Type what you want in plain words, e.g. *Finnish CS2 YouTubers under 50k with email*, and press
 Enter: markets, platform, creator types, size and "has email" are filled in instantly by rules, and the AI reads
 whatever the rules didn't understand. The filters stay visible and editable; *Undo* puts them back. Click the empty

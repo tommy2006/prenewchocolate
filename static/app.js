@@ -605,7 +605,32 @@ function pillHtml(label, value, c, kind) {
   return `<span class="pill-score ${scoreClass(value)}${c.checked === "rules" ? " quick" : ""}" data-tip="${esc(c.tips?.[kind] || "")}"><small>${label}</small>${value ?? "—"}</span>`;
 }
 
+const ui = () => document.documentElement.dataset.ui || "modern";
+
+// Modern look: a big clean image, the text and scores below it (like an article card).
+function modernCardHtml(c, i) {
+  const starred = c.status && c.status !== "hidden";
+  const img = c.cover ? `<img src="${esc(c.cover)}" alt="" loading="lazy" data-name="${esc(c.name)}">` : placeholder(c.name);
+  const meta = [`${fmtNum(c.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}`, S.meta.markets[c.country]?.name || c.country, c.niche].filter(Boolean).join(" · ");
+  const pill = (label, value, kind) => `<span class="mpill ${scoreClass(value)}${c.checked === "rules" ? " quick" : ""}" data-tip="${esc(c.tips?.[kind] || "")}">${label} <b>${value ?? "—"}</b></span>`;
+  return `<article class="card mcard ${i === S.cursor ? "cur" : ""} ${S.panelId === c.id ? "open" : ""}" data-id="${esc(c.id)}" data-i="${i}" tabindex="0" aria-label="${esc(c.name)}, fit ${c.fit}, quality ${c.quality}">
+    <div class="mcard-img">${img}
+      <span class="mplat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
+      <button class="mstar ${starred ? "on" : ""}" data-star="${esc(c.id)}" title="${starred ? "On your shortlist" : "Add to shortlist"} (s)" aria-label="Shortlist">${starred ? ICONS.starOn : ICONS.star}</button>
+    </div>
+    <div class="mcard-body">
+      <div class="mpills">${pill("Fit", c.fit, "fit")}${pill("Quality", c.quality, "quality")}
+        ${c.is_new ? '<span class="mpill new">New</span>' : ""}${c.hidden_gem ? '<span class="mpill gem">Hidden gem</span>' : ""}${c.partner ? '<span class="mpill partner">Past partner</span>' : ""}</div>
+      <h3>${esc(c.name)}</h3>
+      <p class="mmeta">${esc(meta)}</p>
+      <p class="mviews">${fmtNum(c.median_views ?? c.avg_views)} typical views ${trendHtml(c.views_trend)}</p>
+      <p class="msum">${esc(c.summary)}</p>
+    </div>
+  </article>`;
+}
+
 function cardHtml(c, i) {
+  if (ui() === "modern") return modernCardHtml(c, i);
   const starred = c.status && c.status !== "hidden";
   const img = c.cover ? `<img src="${esc(c.cover)}" alt="" loading="lazy" data-name="${esc(c.name)}">` : placeholder(c.name);
   const place = [fmtNum(c.followers), S.meta.markets[c.country]?.name || c.country, c.niche].filter(Boolean).join(" · ");
@@ -1493,6 +1518,14 @@ function setMode(mode) {
   loadCreators();
 }
 
+// Switch between the modern and the classic look; everything else stays the same.
+function setUi(look) {
+  document.documentElement.dataset.ui = look;
+  try { localStorage.setItem("scout.ui", look); } catch { /* storage blocked */ }
+  $$("[data-ui-set]").forEach((b) => b.classList.toggle("on", b.dataset.uiSet === look));
+  if (S.view === "discover") loadCreators({ quiet: true });
+}
+
 // ---------- Events ----------
 const typing = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName) || document.activeElement.isContentEditable;
 
@@ -1613,6 +1646,8 @@ function bindEvents() {
     if (viewBtn) { showView(viewBtn.dataset.view); return; }
     const modeBtn = e.target.closest("[data-mode]");
     if (modeBtn) { setMode(modeBtn.dataset.mode); return; }
+    const uiBtn = e.target.closest("[data-ui-set]");
+    if (uiBtn) { setUi(uiBtn.dataset.uiSet); return; }
     const plat = e.target.closest("[data-platform]");
     if (plat) { S.f.platforms = plat.dataset.platform ? [plat.dataset.platform] : []; renderPlatforms(); searchChanged(); return; }
     const pageBtn = e.target.closest("[data-page]");
@@ -1736,6 +1771,7 @@ function bindEvents() {
   bindEvents();
   try { S.mode = localStorage.getItem("scout.layout") || "cards"; } catch { /* storage blocked */ }
   $$("#view-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
+  $$("[data-ui-set]").forEach((b) => b.classList.toggle("on", b.dataset.uiSet === ui()));
   try {
     [S.meta, S.companies] = await Promise.all([api("/api/meta"), api("/api/companies")]);
   } catch (e) {
