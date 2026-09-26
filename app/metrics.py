@@ -53,6 +53,14 @@ def _avg(values):
     return sum(values) / len(values) if values else None
 
 
+def _median(values):
+    values = sorted(v for v in values if isinstance(v, (int, float)) and v >= 0)
+    if not values:
+        return None
+    mid = len(values) // 2
+    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+
+
 def _vs_typical_score(ratio: float) -> float:
     """1x typical -> 50, 2x -> 75, 4x -> 100, 0.5x -> 25."""
     if ratio <= 0:
@@ -126,6 +134,21 @@ def trend_label(trend: float | None) -> str:
 
 def compute(creator: dict) -> dict:
     """Fill in derived metrics on a normalized creator dict (mutates and returns it)."""
+    compute_stats(creator)
+    # Contacts: bio first (most likely the creator's own), then video descriptions ("Business: ...").
+    extra = creator.pop("_contact_text", "")
+    bio_texts = [creator.get("bio", ""), creator.get("bio_link") or ""]
+    creator["emails"] = extract_emails(creator.get("public_email") or "", *bio_texts, extra)
+    links = extract_links(*bio_texts)
+    if creator.get("bio_link") and str(creator["bio_link"]).startswith("http") and creator["bio_link"] not in links:
+        links.insert(0, creator["bio_link"])
+    creator["links"] = links
+    creator["socials"] = extract_socials(creator["platform"], *bio_texts, extra)
+    return creator
+
+
+def compute_stats(creator: dict) -> dict:
+    """Views, engagement, trend and activity from the stored posts. Safe to run again on saved creators."""
     platform = creator["platform"]
     followers = creator.get("followers")
     now = datetime.now(timezone.utc)
@@ -149,6 +172,7 @@ def compute(creator: dict) -> dict:
     creator["posts_in_window"] = len(window)
 
     avg_views = _avg([p.get("views") for p in window])
+    median_views = _median([p.get("views") for p in window])
     avg_likes = _avg([p.get("likes") for p in window])
     avg_comments = _avg([p.get("comments") for p in window])
     if avg_views is None:  # e.g. Instagram photos have no views: fall back to all recent posts for likes
@@ -157,6 +181,14 @@ def compute(creator: dict) -> dict:
     creator["avg_views"] = round(avg_views) if avg_views is not None else None
     creator["avg_likes"] = round(avg_likes) if avg_likes is not None else None
     creator["avg_comments"] = round(avg_comments) if avg_comments is not None else None
+    creator["median_views"] = round(median_views) if median_views is not None else None
+    # Consistency: share of posts reaching at least half the average. One viral hit among flops scores low.
+    viewed = [p["views"] for p in window if isinstance(p.get("views"), (int, float))]
+    if len(viewed) >= 4 and avg_views:
+        creator["consistency"] = round(sum(1 for v in viewed if v >= avg_views / 2) / len(viewed), 2)
+        creator["views_spread"] = round(avg_views / median_views, 2) if median_views else None
+    else:
+        creator["consistency"] = creator["views_spread"] = None
 
     creator["views_trend"] = _trend(basis_posts, now)
     creator["trend"] = trend_label(creator["views_trend"])
@@ -168,8 +200,10 @@ def compute(creator: dict) -> dict:
         rate = sum(p["likes"] + (p.get("comments") or 0) for p in paired) / sum(p["views"] for p in paired)
     elif platform == "instagram" and followers:
         rate = ((avg_likes or 0) + (avg_comments or 0)) / followers
-    if platform in TYPICAL_REACH and avg_views is not None and followers:
-        reach = avg_views / followers
+    # Median, not mean: a single viral video shouldn't make the whole audience look engaged.
+    typical_views = median_views if median_views is not None else avg_views
+    if platform in TYPICAL_REACH and typical_views is not None and followers:
+        reach = typical_views / followers
     creator["engagement_rate"] = round(rate, 4) if rate is not None else None
     creator["reach"] = round(reach, 3) if reach is not None else None
 
@@ -209,16 +243,6 @@ def compute(creator: dict) -> dict:
         creator["days_since_last_post"] = None
         creator["posts_per_month"] = None
         creator["activity_score"] = 30
-
-    # Contacts: bio first (most likely the creator's own), then video descriptions ("Business: ...").
-    extra = creator.pop("_contact_text", "")
-    bio_texts = [creator.get("bio", ""), creator.get("bio_link") or ""]
-    creator["emails"] = extract_emails(creator.get("public_email") or "", *bio_texts, extra)
-    links = extract_links(*bio_texts)
-    if creator.get("bio_link") and str(creator["bio_link"]).startswith("http") and creator["bio_link"] not in links:
-        links.insert(0, creator["bio_link"])
-    creator["links"] = links
-    creator["socials"] = extract_socials(platform, *bio_texts, extra)
     return creator
 
 

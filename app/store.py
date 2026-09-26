@@ -30,39 +30,12 @@ PRENEW = {
     "suggested_tags": ["Minecraft", "Fortnite", "GTA", "Gaming news", "Gaming tech", "Gaming gear",
                        "Gaming comedy", "Budget gaming", "PC building", "FPS gaming"],
     "search": None,  # filled from DEFAULT_SEARCH below
-    # One-click searches for people who don't know what to type (new companies get AI-written ones).
-    "suggested_searches": [
-        {"title": "Minecraft & Fortnite creators, Finland",
-         "description": "Prenew's most common partner: Finnish gaming channels whose young viewers want their first gaming PC.",
-         "query": "", "tags": ["Minecraft", "Fortnite"], "markets": ["FI"], "platforms": ["youtube", "tiktok"],
-         "follower_min": 5000, "follower_max": 500000},
-        {"title": "Swedish gaming & tech TikTok",
-         "description": "Short gaming-news and tech videos, the style of most of Prenew's Swedish collaborations.",
-         "query": "", "tags": ["Gaming news", "Gaming tech"], "markets": ["SE"], "platforms": ["tiktok"],
-         "follower_min": 4000, "follower_max": 250000},
-        {"title": "Baltic gaming creators",
-         "description": "Estonia, Latvia and Lithuania: small markets where a few thousand followers already reach many local gamers.",
-         "query": "", "tags": ["Minecraft", "GTA"], "markets": ["EE", "LV", "LT"], "platforms": ["tiktok", "youtube"],
-         "follower_min": 2000, "follower_max": 100000},
-        {"title": "German game-specific TikTokers",
-         "description": "Creators focused on one game (ARK, GTA, Souls-likes) or on gaming gear, 5k to 300k followers.",
-         "query": "", "tags": ["Gaming gear", "GTA"], "markets": ["DE"], "platforms": ["tiktok"],
-         "follower_min": 5000, "follower_max": 300000},
-        {"title": "Polish & Hungarian gaming YouTube",
-         "description": "Newer markets for Prenew, where bigger gaming YouTube channels give the fastest reach.",
-         "query": "", "tags": ["Minecraft", "Gaming comedy"], "markets": ["PL", "HU"], "platforms": ["youtube"],
-         "follower_min": 50000, "follower_max": 500000},
-        {"title": "Hidden gems: tiny but loyal",
-         "description": "Nordic and Baltic gaming creators under 10k followers with unusually engaged audiences; cheap and trusted.",
-         "query": "", "tags": ["Minecraft", "Fortnite"], "markets": ["FI", "SE", "EE"], "platforms": ["tiktok", "youtube"],
-         "follower_min": 500, "follower_max": 10000},
-    ],
-    "seed_version": 2,
+    # Structured context the AI judges fit against (editable in "Brand profile").
+    "profile": None,  # filled from PRENEW_PROFILE below
+    "seed_version": 3,
 }
 
-# Prenew's first curated searches (before we had their collaboration history); replaced on upgrade.
-_OLD_PRENEW_TITLES = {"Budget PC builders in Finland", "German tech reviewers, 50k-250k", "CS2 & Valorant on TikTok",
-                      "Gaming setup & streaming creators", "Second-hand & sustainable tech", "Hidden gems: tiny but loyal"}
+# Prenew's first creator types (before we had their collaboration history); replaced on upgrade.
 _OLD_PRENEW_TAGS = {"PC building", "Budget gaming", "Hardware reviews", "Gaming setup", "Esports",
                     "Streaming setup", "Sustainable tech", "FPS gaming"}
 
@@ -86,6 +59,30 @@ PRENEW["search"] = {
     "avoid": ["Gambling or skin betting", "Sponsored by competing PC retailers"],
 }
 
+# Who the company is and who it wants to reach. The AI scores "fit" against this.
+GOALS = {"sales": "Sales", "balanced": "Balanced", "awareness": "Awareness"}
+DEFAULT_PROFILE = {
+    "website": "",
+    "target_customer": "",   # who buys, and who watches
+    "min_audience_age": None,  # audiences clearly younger than this are a poor fit
+    "price_range": "",
+    "competitors": [],       # a creator sponsored by one of these is flagged
+    "values": "",            # tone and what the brand stands for
+    "no_go": [],             # never work with these kinds of creators
+    "budget_max": None,      # EUR per collaboration
+    "goal": "balanced",      # sales | balanced | awareness: changes how fit and audience quality are weighed
+}
+# Prenew's starting profile, from their brief. Competitors are an editable first guess.
+PRENEW["profile"] = {
+    **DEFAULT_PROFILE,
+    "target_customer": "Gamers who want a capable gaming PC but find new ones too expensive, and parents buying "
+                       "a first gaming PC for a teenager. Buyers are mostly 16-35.",
+    "min_audience_age": 13,
+    "competitors": ["Back Market", "refurbed", "Verkkokauppa.com", "Jimm's PC-Store", "Gigantti"],
+    "values": "Trust (every PC is tested and comes with a warranty), value for money, and less e-waste than buying new.",
+    "no_go": ["Gambling or skin betting", "Adult content"],
+}
+
 # Fields that used to live on the company profile before they moved into the search area.
 _OLD_PROFILE_FIELDS = ("website", "creator_brief", "tags", "markets", "platforms", "follower_min",
                        "follower_max", "deal_types", "avoid", "example_creators")
@@ -98,19 +95,23 @@ def _migrate_company(co: dict) -> None:
             **{k: co[k] for k in ("markets", "deal_types", "avoid", "example_creators") if co.get(k)},
         }
     co.setdefault("suggested_tags", co.get("tags") or [])
-    co.setdefault("suggested_searches", copy.deepcopy(PRENEW["suggested_searches"]) if co.get("id") == PRENEW["id"] else [])
+    co.pop("suggested_searches", None)  # replaced by recent searches
+    co.pop("suggesting", None)
     for key in ("follower_min", "follower_max"):
         co["search"].setdefault(key, None)
     if co.get("scout_off") is None:
         # The web scout runs paid Claude web searches; it's opt-in per search now, never left on by default.
         co["search"]["ai_scout"] = False
         co["scout_off"] = True
+    co["profile"] = {**DEFAULT_PROFILE, **(co.get("profile") or {})}
     if co.get("id") == PRENEW["id"] and co.get("seed_version", 1) < PRENEW["seed_version"]:
-        # Searches and creator types based on Prenew's real collaborations; keep anything the user added.
-        own = [x for x in co.get("suggested_searches", []) if x.get("title") not in _OLD_PRENEW_TITLES]
-        co["suggested_searches"] = copy.deepcopy(PRENEW["suggested_searches"]) + own
-        own_tags = [t for t in co.get("suggested_tags", []) if t not in _OLD_PRENEW_TAGS]
-        co["suggested_tags"] = list(dict.fromkeys(PRENEW["suggested_tags"] + own_tags))
+        if co.get("seed_version", 1) < 2:
+            # Creator types based on Prenew's real collaborations; keep anything the user added.
+            own_tags = [t for t in co.get("suggested_tags", []) if t not in _OLD_PRENEW_TAGS]
+            co["suggested_tags"] = list(dict.fromkeys(PRENEW["suggested_tags"] + own_tags))
+        # Fill the brand profile, but never overwrite something the user typed.
+        co["profile"] = {k: co["profile"][k] if co["profile"][k] not in (None, "", []) else v
+                         for k, v in PRENEW["profile"].items()}
         co["seed_version"] = PRENEW["seed_version"]
     for key in _OLD_PROFILE_FIELDS:
         co.pop(key, None)

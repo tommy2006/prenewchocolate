@@ -18,9 +18,10 @@ TRACKER_COLUMNS = [
 ]
 EXTRA_COLUMNS = [
     ("Instagram followers", 12), ("Email", 30), ("YouTube", 34), ("TikTok", 34), ("Instagram", 34),
-    ("Other links", 40), ("Match score", 9), ("Views counted over", 20), ("Views trend", 10),
+    ("Other links", 40), ("Match score", 9), ("Fit", 7), ("Audience quality", 9), ("Confidence", 11),
+    ("Authenticity", 10), ("Est. price per post (EUR)", 14), ("Views counted over", 20), ("Views trend", 10),
     ("Engagement vs typical", 12), ("Last post (days ago)", 10), ("Risks / red flags", 44),
-    ("Why they fit", 60), ("Summary", 60), ("Status", 11), ("Past collaborations", 22),
+    ("Why they fit", 60), ("Verdict", 60), ("Summary", 60), ("Status", 11), ("Past collaborations", 22),
 ]
 COLUMNS = TRACKER_COLUMNS + EXTRA_COLUMNS
 NUMBER_COLS = {"YT subscribers", "TikTok followers", "Instagram followers"}
@@ -42,9 +43,20 @@ ABOUT = [
     ("Views trend", "Average views in the last 30 days compared with the 60 days before."),
     ("Engagement vs typical", "Likes + comments per view, and views per follower, compared with typical accounts "
                               "of the same size on the same platform. 1.0 = typical, 2.0 = twice as engaged."),
-    ("Match score", "0-100: niche fit 40%, market 20%, engagement 25%, activity 10%, brand safety 5%, "
-                    "minus 15 each for a competitor sponsorship, brand-safety concerns, or content unrelated to the niche. "
-                    "Scored by rules for everyone, then checked by the AI for the most promising creators."),
+    ("Match score", "0-100, used for ranking: a blend of Fit and Audience quality. The brand's campaign goal decides "
+                    "the blend (Sales 65/35, Balanced 60/40, Awareness 50/50)."),
+    ("Fit", "0-100: would a marketer pick them for this brand? Content (matches the creator types), audience "
+            "(viewers are the brand's customers: age, interests, trust), market (audience in the target markets, "
+            "incl. comment language), brand & safety, and readiness & cost (contact, sponsor experience, price vs budget). "
+            "Every part is backed by evidence that cites posts or comments."),
+    ("Audience quality", "0-100: is the audience real and paying attention? Authenticity 35%, engagement vs typical "
+                         "35-30%, consistency 15% (share of posts reaching half the average), activity 10%, momentum 10% (views trend)."),
+    ("Confidence", "How much the scores rest on: whether the AI read their posts (or did a deep evaluation), "
+                   "how many posts, likes and comments were available."),
+    ("Authenticity", "100 = nothing suspicious. Lowered by signals such as few followers watching, likes far above "
+                     "typical, many likes but no comments, or generic/copy-paste comments. Signals, not proof."),
+    ("Est. price per post", "A rough range: median views × common rates per 1,000 views (YouTube €15-30, TikTok €8-18). "
+                            "Check with the creator."),
 ]
 
 
@@ -119,12 +131,18 @@ def _row(primary: dict, m: dict, profs: dict[str, dict], partner: dict | None, e
         "Instagram": url(ig, "instagram"),
         "Other links": "; ".join(others[:6]),
         "Match score": max([m["score"]] + [mm["score"] for mm in extra_matches]),
+        "Fit": m.get("fit"),
+        "Audience quality": m.get("quality"),
+        "Confidence": (m.get("confidence") or {}).get("level", ""),
+        "Authenticity": (primary.get("authenticity") or {}).get("score"),
+        "Est. price per post (EUR)": f"{price['low']}-{price['high']}" if (price := primary.get("price")) else "",
         "Views counted over": "; ".join(windows),
         "Views trend": f"{trend:+.0%}" if trend is not None else "",
         "Engagement vs typical": vs,
         "Last post (days ago)": min(last) if last else None,
         "Risks / red flags": "; ".join(flags),
         "Why they fit": " | ".join(m.get("why", [])),
+        "Verdict": m.get("verdict") or "",
         "Summary": m.get("summary") or "",
         "Status": m.get("status") or "",
         "Past collaborations": ", ".join(weeks) or ("yes" if partner else ""),

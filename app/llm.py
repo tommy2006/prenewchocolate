@@ -12,6 +12,7 @@ import anthropic
 import httpx
 
 from . import config, partners, settings
+from .store import store
 from .markets import LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS
 
 log = logging.getLogger("scout")
@@ -406,14 +407,33 @@ BOOL = {"type": "boolean"}
 STR_LIST = {"type": "array", "items": STR}
 
 
+GOAL_TEXT = {
+    "sales": "Sales: creators whose viewers will actually buy. Audience fit matters most.",
+    "balanced": "Balanced: sales and reach both matter.",
+    "awareness": "Awareness: reach many relevant people in the target markets.",
+}
+
+
 def brand_block(company: dict, search: dict, past_limit: int = 30) -> str:
-    """The company (from its profile) plus what this particular search asks for (from the search area)."""
+    """The company (profile), what this search asks for, what worked before and what the team rejected."""
     markets = ", ".join(f"{MARKETS[m]['name']} ({m})" for m in search.get("markets", []) if m in MARKETS)
     fmax = search.get("follower_max")
-    lines = [
-        "<brand>",
-        f"Name: {company.get('name', '')}",
-        f"About: {company.get('description') or 'n/a'}",
+    p = company.get("profile") or {}
+    lines = ["<brand>", f"Name: {company.get('name', '')}", f"About: {company.get('description') or 'n/a'}"]
+    for label, value in (("Target customer", p.get("target_customer")), ("Price range", p.get("price_range")),
+                         ("Values and tone", p.get("values")), ("Website", p.get("website"))):
+        if value:
+            lines.append(f"{label}: {value}")
+    if p.get("min_audience_age"):
+        lines.append(f"Audience must mostly be {p['min_audience_age']}+ (younger audiences can't buy)")
+    if p.get("competitors"):
+        lines.append(f"Competitors (a creator sponsored by one is not a partner): {', '.join(p['competitors'])}")
+    if p.get("no_go"):
+        lines.append(f"Never work with: {', '.join(p['no_go'])}")
+    if p.get("budget_max"):
+        lines.append(f"Budget per collaboration: up to EUR {p['budget_max']:,}")
+    lines.append(f"Campaign goal: {GOAL_TEXT.get(p.get('goal') or 'balanced', GOAL_TEXT['balanced'])}")
+    lines += [
         "</brand>",
         "<search>",
         f"Creator types wanted: {', '.join(search.get('tags', [])) or 'not specified; infer what would sell this brand'}",
@@ -435,7 +455,27 @@ def brand_block(company: dict, search: dict, past_limit: int = 30) -> str:
             past,
             "</past_collaborations>",
         ]
+    feedback = team_feedback(company)
+    if feedback:
+        lines += ["<team_feedback>", "How the marketing team judged earlier suggestions. Learn from it.", feedback, "</team_feedback>"]
     return "\n".join(lines)
+
+
+def team_feedback(company: dict, limit: int = 12) -> str:
+    """Creators the team shortlisted or rejected (with the reason they gave), newest first."""
+    rows = []
+    for cid, m in store.matches.get(company.get("id"), {}).items():
+        c = store.creators.get(cid)
+        if not c or not m.get("status"):
+            continue
+        size = f"{c.get('followers') or 0:,} followers"
+        what = ", ".join(x for x in (PLATFORMS.get(c["platform"]), m.get("niche"), size, m.get("country")) if x)
+        if m["status"] == "hidden":
+            rows.append((m.get("status_at") or "", f"Rejected {c.get('name')} ({what})" + (f": {m['feedback']}" if m.get("feedback") else "")))
+        else:
+            rows.append((m.get("status_at") or "", f"Shortlisted {c.get('name')} ({what})"))
+    rows.sort(reverse=True)
+    return "\n".join(r for _, r in rows[:limit])
 
 
 # --- Search planning -------------------------------------------------------------------------
@@ -486,32 +526,45 @@ async def plan_searches(company: dict, search: dict, platforms: list[str]) -> li
 
 # --- Scoring ---------------------------------------------------------------------------------
 
-SCORE_SYSTEM = """You are an influencer-discovery analyst for a marketing team. You judge whether social media creators are a good partnership fit for one specific brand. You are skeptical of vanity metrics and you value small creators whose audiences are genuinely engaged and relevant.
+DIMS = ["content", "audience", "market", "brand", "readiness"]
+
+SCORE_SYSTEM = """You are an influencer-marketing analyst. You judge, the way an experienced human marketer would, whether each creator is a good partner for one specific brand. Look past follower counts: who actually watches, whether those people would buy, and whether a sponsored post would feel natural. You value small creators whose audiences are genuinely engaged and relevant.
 
 Score each creator from 0 to 100 on:
-- niche_fit: how closely their actual recent content matches the creator types and focus in the search (or, if none are given, creators whose audience would buy from this brand). 90+ = core niche, posts about it regularly. 60-80 = adjacent audience that would plausibly buy. Below 40 = unrelated.
-- market_fit: how likely their audience is in the search's target markets, judged from the language of their posts, stated location and platform country. 90+ = clearly local to a target market. 50 = unclear or mixed. Below 30 = clearly elsewhere.
+- content_fit: how closely their actual recent content matches the creator types and focus in the search (or, if none are given, what would sell this brand). 90+ = core niche, posts about it regularly. 60-80 = adjacent. Below 40 = unrelated.
+- audience_fit: how likely their viewers are the brand's customers: age (respect the brand's minimum audience age), interest in what the brand sells, buying power, trust in the creator (do viewers ask them for advice?).
+- market_fit: how likely their audience is in the target markets, from post language, comment language, stated location and platform country. 90+ = clearly local. 50 = unclear. Below 30 = elsewhere.
+- brand_fit: whether their tone and values suit the brand and would make its message believable. Lower it for anything on the brand's "never work with" list.
+- readiness: how ready they are for a collaboration: contact details, experience with sponsored posts or codes (but not so many ads that viewers tune out), posting regularly, a format where a sponsored segment fits naturally, and a likely price within the brand's budget.
 - brand_safety: 100 = nothing concerning. Subtract for gambling or skin betting, hate, adult content, misinformation, or heavy controversy.
 
-Also return for each creator:
-- language: ISO 639-1 code of the language they mostly post in.
-- country: ISO 3166-1 alpha-2 code of where they appear to be based, or "" if unknown.
-- summary: one sentence of at most 110 characters that a marketer can read at a glance: who they are and why they matter for this brand.
-- niche: their main content category in 1-3 words, for example "Gaming", "Tech reviews", "PC building", "Setups & desks", "Esports".
-- games: the specific games they mainly play or cover, as titles (for example "Valorant", "Counter-Strike 2", "Minecraft"). Empty list if they don't focus on particular games.
-- tags: 3 to 5 short content tags (1-3 words, Title Case), most specific first.
-- matched_tags: which of the search's "creator types wanted" this creator genuinely fits, copied exactly as written there. Empty list if none, or if no creator types were given.
-- why: 2 or 3 short reasons, each tied to evidence in their content or stats.
-- red_flags: short concerns (competitor sponsorship, off-niche, inactive, signs of bought followers, unsafe content). Empty list if none.
-- competitor_sponsor: true only if they appear to be sponsored by a direct competitor of the brand.
+Also return:
+- language: ISO 639-1 code of the language they mostly post in. country: ISO 3166-1 alpha-2 code of where they are based, or "".
+- summary: one sentence of at most 110 characters a marketer can read at a glance: who they are and why they matter for this brand.
+- niche: their main content category in 1-3 words. games: titles of the games they mainly cover (empty if none).
+- tags: 3 to 5 short content tags (Title Case), most specific first.
+- matched_tags: which of the search's "creator types wanted" they genuinely fit, copied exactly. Empty if none.
+- evidence: 3 to 6 claims behind your scores. Each has dim (one of content, audience, market, brand, readiness), sign ("+" helps the fit, "-" hurts it), claim (one short sentence in English), and posts: the refs of the posts that show it (e.g. ["p1", "p4"]), plus comments: refs of comments that show it (e.g. ["c2"]). Cite only refs that appear in the data. Every claim about content, audience or brand must cite at least one post or comment.
+- competitor_sponsor: true only if they appear sponsored by one of the brand's competitors, or are themselves a shop selling the same products.
 
-Judge only from the data provided and do not invent facts. Write summary, tags, why and red_flags in English. Return one result per creator, using the creator's id."""
+Judge only from the data provided and never invent facts. Return one result per creator, using the creator's id."""
+
+EVIDENCE = {"type": "array", "items": _obj({
+    "dim": {"type": "string", "enum": DIMS},
+    "sign": {"type": "string", "enum": ["+", "-"]},
+    "claim": STR,
+    "posts": STR_LIST,
+    "comments": STR_LIST,
+})}
 
 SCORE_SCHEMA = _obj({
     "results": {"type": "array", "items": _obj({
         "id": STR,
-        "niche_fit": INT,
+        "content_fit": INT,
+        "audience_fit": INT,
         "market_fit": INT,
+        "brand_fit": INT,
+        "readiness": INT,
         "brand_safety": INT,
         "language": STR,
         "country": STR,
@@ -520,18 +573,32 @@ SCORE_SCHEMA = _obj({
         "games": STR_LIST,
         "tags": STR_LIST,
         "matched_tags": STR_LIST,
-        "why": STR_LIST,
-        "red_flags": STR_LIST,
+        "evidence": EVIDENCE,
         "competitor_sponsor": BOOL,
     })},
 })
 
 
-def _compact(c: dict, lite: bool = False) -> dict:
-    """What the AI sees about a creator. `lite` (local models) sends fewer, shorter posts: on a laptop CPU
-    every input token costs time."""
+def _audience_facts(c: dict) -> dict:
+    a, auth, sp = c.get("audience") or {}, c.get("authenticity") or {}, c.get("sponsorship") or {}
+    return {
+        "comment_languages": a.get("languages") or None,
+        "generic_comment_share": a.get("generic_share"),
+        "question_share": a.get("question_share"),
+        "authenticity_signals": [x["text"] for x in auth.get("signals", [])] or None,
+        "sponsored_posts": f"{sp.get('sponsored', 0)} of {sp.get('checked', 0)}" if sp.get("checked") else None,
+        "posts_with_discount_codes": sp.get("with_codes") or None,
+        "has_email": bool(c.get("emails")),
+        "estimated_price_eur": f"{c['price']['low']}-{c['price']['high']}" if c.get("price") else None,
+    }
+
+
+def _compact(c: dict, lite: bool = False, n_posts: int | None = None, n_comments: int = 8, desc_len: int = 0) -> dict:
+    """What the AI sees about a creator. Posts and comments carry refs (p1, c1) that evidence must cite.
+    `lite` (local models) sends fewer, shorter posts: on a laptop CPU every input token costs time."""
     er = c.get("engagement_rate")
-    n_posts, text_len, bio_len = (6, 90, 300) if lite else (10, 150, 600)
+    n, text_len, bio_len = (6, 90, 300) if lite else (10, 150, 600)
+    n = n_posts or n
     return {
         "id": c["id"],
         "platform": PLATFORMS[c["platform"]],
@@ -539,46 +606,96 @@ def _compact(c: dict, lite: bool = False) -> dict:
         "handle": c.get("handle"),
         "followers": c.get("followers"),
         "bio": (c.get("bio") or "")[:bio_len],
-        "category": c.get("category"),
         "stated_country": c.get("country") or None,
         "stated_language": c.get("language") or None,
-        "avg_views": c.get("avg_views"),
+        "median_views": c.get("median_views"),
         "avg_views_window": c.get("views_window"),
         "views_trend_pct": round(c["views_trend"] * 100) if c.get("views_trend") is not None else None,
         "engagement_rate_pct": round(er * 100, 2) if er is not None else None,
         "engagement_vs_typical_for_size": c.get("engagement_vs_typical"),
         "posts_per_month": c.get("posts_per_month"),
         "days_since_last_post": c.get("days_since_last_post"),
+        **({} if lite else _audience_facts(c)),
         "recent_posts": [
-            {"text": (p.get("title") or "")[:text_len], "views": p.get("views"), "likes": p.get("likes"),
-             "comments": p.get("comments"), **({"short": True} if p.get("is_short") else {})}
-            for p in c.get("recent_posts", [])[:n_posts]  # enough titles to tell which games they play
+            {"ref": f"p{i + 1}", "text": (p.get("title") or "")[:text_len],
+             **({"description": p["desc"][:desc_len]} if desc_len and p.get("desc") else {}),
+             "views": p.get("views"), "likes": p.get("likes"), "comments": p.get("comments"),
+             **({"short": True} if p.get("is_short") else {})}
+            for i, p in enumerate(c.get("recent_posts", [])[:n])
         ],
+        **({"sample_comments": [{"ref": f"c{i + 1}", "text": x["text"][:140]}
+                                for i, x in enumerate(c.get("comment_sample", [])[:n_comments])]}
+           if n_comments and not lite and c.get("comment_sample") else {}),
     }
 
 
+REF_RE = re.compile(r"\[?\b([pc])(\d{1,2})\b\]?", re.I)
+
+
+def _resolve(c: dict, dim: str, sign: str, claim: str, post_refs: list, comment_refs: list, src: str) -> dict | None:
+    """Turn cited refs into real posts and comments. A claim that cites only refs that don't exist was
+    probably invented, so it's dropped."""
+    posts, quotes, cited, bad = [], [], 0, 0
+    recent, comments = c.get("recent_posts", []), c.get("comment_sample", [])
+    for ref in post_refs or []:
+        m = REF_RE.fullmatch(str(ref).strip())
+        i = int(m.group(2)) - 1 if m and m.group(1).lower() == "p" else -1
+        if 0 <= i < min(len(recent), 12):
+            cited += 1
+            posts.append({"title": (recent[i].get("title") or "")[:100], "url": recent[i].get("url")})
+        else:
+            bad += 1
+    for ref in comment_refs or []:
+        m = REF_RE.fullmatch(str(ref).strip())
+        i = int(m.group(2)) - 1 if m and m.group(1).lower() == "c" else -1
+        if 0 <= i < min(len(comments), 30):
+            cited += 1
+            quotes.append(comments[i]["text"][:160])
+        else:
+            bad += 1
+    if bad and not cited:
+        return None
+    claim = REF_RE.sub("", claim or "").replace("()", "").strip(" ,;")
+    if not claim or dim not in DIMS:
+        return None
+    return {"dim": dim, "sign": "-" if sign == "-" else "+", "text": claim[:200], "posts": posts[:3], "quotes": quotes[:2],
+            "src": src, "fact": False}
+
+
+def _evidence(c: dict, items: list, src: str) -> list[dict]:
+    out = []
+    for e in items or []:
+        if isinstance(e, dict):
+            r = _resolve(c, e.get("dim"), e.get("sign"), e.get("claim") or "", e.get("posts"), e.get("comments"), src)
+            if r:
+                out.append(r)
+    return out
+
+
 # Local models on a laptop CPU write ~5 tokens a second, so they answer only what the rules can't know
-# (fit, safety, competitors, a summary) and read only titles and bio. Tags, language and stats come from rules.
+# (fit, audience, safety, competitors, a summary) and read only titles and bio. Stats and facts come from rules.
 LOCAL_SCORE_SYSTEM = """You judge whether social media creators fit one brand's influencer program. For each creator, from their bio and post titles only:
-- niche_fit 0-100: how well their content matches the creator types wanted (90+ core niche, 60-80 adjacent, under 40 unrelated).
+- content_fit 0-100: how well their content matches the creator types wanted (90+ core niche, 60-80 adjacent, under 40 unrelated).
+- audience_fit 0-100: how likely their viewers are the brand's customers (old enough to buy, interested in what the brand sells).
 - market_fit 0-100: how likely their audience is in the target markets, from the language of their posts and their country (90+ clearly local, 50 unclear, under 30 elsewhere).
 - brand_safety 0-100: 100 unless gambling, skin betting, adult content, hate or big controversy.
 - niche: 1-3 words. games: titles of the games they mainly cover (can be empty).
 - summary: at most 90 characters, in English: who they are and why they matter (or don't) for this brand.
-- red_flags: short concerns, or an empty list.
-- competitor_sponsor: true if the account IS a company selling the same kind of products as the brand (a shop, retailer or manufacturer), or is sponsored by one. Such accounts are competitors, not partners: give them niche_fit under 30.
+- why: 1 or 2 short reasons in English, each ending with the posts that show it, e.g. "Builds budget gaming PCs [p1, p3]". Use "-" at the start for a reason against.
+- competitor_sponsor: true if the account IS a company selling the same kind of products as the brand, or is sponsored by one. Such accounts are competitors, not partners: give them content_fit under 30.
 Judge only from the data given."""
 
 LOCAL_SCORE_SCHEMA = _obj({
     "results": {"type": "array", "items": _obj({
         "id": STR,
-        "niche_fit": INT,
+        "content_fit": INT,
+        "audience_fit": INT,
         "market_fit": INT,
         "brand_safety": INT,
         "niche": STR,
         "games": STR_LIST,
         "summary": STR,
-        "red_flags": STR_LIST,
+        "why": STR_LIST,
         "competitor_sponsor": BOOL,
     })},
 })
@@ -593,24 +710,142 @@ def _compact_local(c: dict) -> dict:
         "country": c.get("country") or None,
         "language": c.get("language") or None,
         "bio": (c.get("bio") or "")[:200],
-        "posts": [(p.get("title") or "")[:80] for p in c.get("recent_posts", [])[:6]],
+        "posts": [f"p{i + 1}: {(p.get('title') or '')[:80]}" for i, p in enumerate(c.get("recent_posts", [])[:6])],
     }
+
+
+def _local_why(c: dict, reasons: list) -> list[dict]:
+    out = []
+    for text in reasons or []:
+        text = str(text).strip()
+        sign = "-" if text.startswith("-") else "+"
+        refs = [f"{k}{n}" for k, n in REF_RE.findall(text)]
+        r = _resolve(c, "content", sign, text.lstrip("-+ "), [x for x in refs if x[0].lower() == "p"], [], "ai")
+        if r:
+            out.append(r)
+    return out[:2]
 
 
 async def score_batch(company: dict, search: dict, creators: list[dict], ai: dict | None = None) -> dict[str, dict]:
     ai = ai or settings.ai_config()
+    by_id = {c["id"]: c for c in creators}
     if ai["local"]:
         system = LOCAL_SCORE_SYSTEM + "\n\n" + brand_block(company, search, past_limit=12)
         user = "Creators:\n" + json.dumps([_compact_local(c) for c in creators], ensure_ascii=False)
-        data = await _json(system, user, LOCAL_SCORE_SCHEMA, ai=ai, max_tokens=140 * len(creators) + 100)
-        return {r["id"]: r for r in data["results"] if isinstance(r, dict) and r.get("id")}
+        data = await _json(system, user, LOCAL_SCORE_SCHEMA, ai=ai, max_tokens=170 * len(creators) + 100)
+        out = {}
+        for r in data["results"]:
+            if isinstance(r, dict) and r.get("id") in by_id:
+                r["evidence"] = _local_why(by_id[r["id"]], r.pop("why", []))
+                r["red_flags"] = []
+                out[r["id"]] = r
+        return out
     system = SCORE_SYSTEM + "\n\n" + brand_block(company, search)
-    user = "Creators to evaluate:\n" + json.dumps([_compact(c, lite=ai["local"]) for c in creators], ensure_ascii=False)
-    data = await _json(system, user, SCORE_SCHEMA, ai=ai, max_tokens=700 * len(creators) + 300)
-    defaults = {"niche_fit": 0, "market_fit": 50, "brand_safety": 100, "language": "", "country": "", "summary": "",
-                "niche": "", "games": [],
-                "tags": [], "matched_tags": [], "why": [], "red_flags": [], "competitor_sponsor": False}
-    return {r["id"]: {**defaults, **r} for r in data["results"] if isinstance(r, dict) and r.get("id")}
+    user = "Creators to evaluate:\n" + json.dumps([_compact(c, desc_len=120) for c in creators], ensure_ascii=False)
+    data = await _json(system, user, SCORE_SCHEMA, ai=ai, max_tokens=900 * len(creators) + 300)
+    out = {}
+    for r in data["results"]:
+        if isinstance(r, dict) and r.get("id") in by_id:
+            r["evidence"] = _evidence(by_id[r["id"]], r.get("evidence"), "ai")
+            out[r["id"]] = r
+    return out
+
+
+# --- Deep evaluation (on demand, one creator) ---------------------------------------------------
+
+DEEP_SYSTEM = """You are a senior influencer-marketing manager deciding whether to spend budget on one creator for one brand. Read everything provided: posts with their descriptions, a sample of real viewer comments, audience statistics and authenticity signals. Judge like a careful human would: who the viewers really are (age, interests, buying power, where they live), whether they trust the creator, whether a sponsored segment would feel natural in this creator's format, sponsorship history and saturation, risks, and value for money against the budget.
+
+Return:
+- content_fit, audience_fit, market_fit, brand_fit, readiness, brand_safety: 0-100, defined as usual (content = matches the niche wanted; audience = viewers are the brand's customers; market = audience in the target markets; brand = tone and values suit the brand; readiness = contact, sponsor experience without saturation, regular posting, natural format, price within budget; brand_safety 100 = nothing concerning).
+- verdict: two sentences, like a note to your team: should we work with them, and why or why not.
+- audience_note: one sentence on who watches (likely age range, interests, where they are), and how sure you are.
+- collab_idea: one concrete collaboration idea that would feel natural for this creator and this brand.
+- sponsors_seen: brand names they have promoted recently (empty if none).
+- summary, niche, games, tags: as usual.
+- evidence: 4 to 8 claims (dim, sign, claim, posts, comments), each citing the refs (p1.., c1..) that show it. Never cite refs that don't exist.
+- competitor_sponsor: true only if sponsored by one of the brand's competitors.
+Judge only from the data provided and never invent facts."""
+
+DEEP_SCHEMA = _obj({
+    "content_fit": INT, "audience_fit": INT, "market_fit": INT, "brand_fit": INT, "readiness": INT, "brand_safety": INT,
+    "verdict": STR, "audience_note": STR, "collab_idea": STR, "sponsors_seen": STR_LIST,
+    "summary": STR, "niche": STR, "games": STR_LIST, "tags": STR_LIST,
+    "evidence": EVIDENCE, "competitor_sponsor": BOOL,
+})
+
+
+async def deep_evaluate(company: dict, search: dict, c: dict) -> dict:
+    """A thorough, one-creator judgement. Uses the writing AI (usually the stronger, paid one)."""
+    ai = settings.writer_config()
+    local = ai["local"]
+    user = (f"{brand_block(company, search)}\n\nCreator:\n"
+            + json.dumps(_compact(c, n_posts=8 if local else 12, n_comments=12 if local else 30, desc_len=150 if local else 300),
+                         ensure_ascii=False))
+    data = await _json(DEEP_SYSTEM, user, DEEP_SCHEMA, ai=ai, max_tokens=4000)
+    data["evidence"] = _evidence(c, data.get("evidence"), "ai")
+    data["ai_checked"] = "deep"
+    data["model"] = f"{ai['label']} · {active_model(ai)}"
+    return data
+
+
+# --- Search bar: plain words -> filters ---------------------------------------------------------
+
+PARSE_SYSTEM = """You turn a marketer's description of the creators they want into search filters. Use only what the text says; leave everything else empty or 0.
+- tags: creator types or content niches mentioned (1-3 words each, Title Case), e.g. "Minecraft", "PC building", "Budget gaming".
+- markets: ISO country codes from the allowed list, for countries, nationalities or languages mentioned.
+- platforms: "youtube" and/or "tiktok" if mentioned.
+- follower_min, follower_max: follower range if mentioned (0 = not said).
+- language: ISO 639-1 code if a posting language is asked for, else "".
+- has_email: true if they want contact details. growing: true if they want creators growing fast. gems: true for small but very engaged creators.
+- rest: any words that are not covered by the fields above (e.g. a creator's name), else ""."""
+
+PARSE_SCHEMA = _obj({
+    "tags": STR_LIST, "markets": STR_LIST, "platforms": STR_LIST, "follower_min": INT, "follower_max": INT,
+    "language": STR, "has_email": BOOL, "growing": BOOL, "gems": BOOL, "rest": STR,
+})
+
+
+async def parse_query(text: str, known_tags: list[str]) -> dict:
+    allowed = ", ".join(f"{code} ({m['name']})" for code, m in MARKETS.items())
+    user = f"Allowed market codes: {allowed}\nCreator types this team uses: {', '.join(known_tags) or 'none'}\n\nText: {text}"
+    return await _json(PARSE_SYSTEM, user, PARSE_SCHEMA, effort="low", max_tokens=800)
+
+
+# --- Brand profile from a website -----------------------------------------------------------------
+
+PROFILE_SYSTEM = """You fill in a brand profile for an influencer-marketing team from the text of the company's website. Be concrete and short. Use only what the text supports; leave a field empty ("" or [] or 0) when it doesn't say.
+- description: 2-3 sentences: what they sell, to whom, what makes it different, where.
+- target_customer: who buys (and who might watch creators that sell it).
+- min_audience_age: youngest audience age that makes sense for this product (0 if any age).
+- price_range: typical price range of their products, with currency.
+- competitors: direct competitors named or clearly implied (company names only).
+- values: their tone and what they stand for, in one sentence.
+- no_go: kinds of creators or content this brand should clearly avoid.
+- goal: "sales", "balanced" or "awareness", whichever suits a company like this best."""
+
+PROFILE_SCHEMA = _obj({
+    "description": STR, "target_customer": STR, "min_audience_age": INT, "price_range": STR,
+    "competitors": STR_LIST, "values": STR, "no_go": STR_LIST, "goal": {"type": "string", "enum": ["sales", "balanced", "awareness"]},
+})
+TAG_RE = re.compile(r"<(script|style|noscript|svg)[^>]*>.*?</\1>|<[^>]+>", re.S | re.I)
+
+
+async def profile_from_website(url: str, name: str = "") -> dict:
+    if not re.match(r"https?://", url):
+        url = "https://" + url
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True,
+                                     headers={"User-Agent": "Mozilla/5.0 (compatible; Scout brand profile)"}) as http:
+            r = await http.get(url)
+    except httpx.HTTPError as e:
+        raise LLMError(f"Couldn't open {url}: {e}") from e
+    if r.status_code >= 400:
+        raise LLMError(f"{url} answered with error {r.status_code}")
+    text = re.sub(r"\s+", " ", TAG_RE.sub(" ", r.text)).strip()
+    if len(text) < 200:
+        raise LLMError("That page has almost no text Scout can read (it may need JavaScript). Fill the profile in by hand.")
+    user = f"Company: {name or 'unknown'}\nWebsite: {url}\n\nWebsite text:\n{text[:9000]}"
+    return await _json(PROFILE_SYSTEM, user, PROFILE_SCHEMA, effort="low", max_tokens=2000)
 
 
 # --- Outreach --------------------------------------------------------------------------------
@@ -644,73 +879,6 @@ async def suggest_tags(name: str, description: str, existing: list[str]) -> list
     data = await _json(TAGS_SYSTEM, user, _obj({"tags": STR_LIST}), effort="low", max_tokens=2000)
     have = {t.lower() for t in existing}
     return [t.strip() for t in data["tags"] if isinstance(t, str) and t.strip() and t.lower() not in have][:10]
-
-
-# --- Suggested searches (for people who don't know what to search for) ------------------------
-
-SEARCHES_SYSTEM = """You help a marketing team that doesn't know where to start with influencer marketing. Suggest ready-to-run searches for social media creators who would suit their company.
-
-For each search give:
-- title: at most 6 words, concrete (who and where), e.g. "Budget PC builders in Finland".
-- description: one sentence (at most 20 words) saying who it finds and why they suit this company.
-- query: an optional 1-3 word search phrase (a game, product or topic), or "".
-- tags: 1-3 creator types (1-3 words each, Sentence case).
-- markets: 1-3 target countries as ISO codes from the allowed list.
-- platforms: 1-2 of youtube, tiktok.
-- follower_min and follower_max: the follower range; follower_max 0 means no upper limit.
-
-Make the searches varied: different niches, markets, platforms and sizes. Include at least one for small creators (under 10k followers) and one for mid-size creators (50k-250k)."""
-
-SEARCHES_SCHEMA = _obj({
-    "searches": {"type": "array", "items": _obj({
-        "title": STR,
-        "description": STR,
-        "query": STR,
-        "tags": STR_LIST,
-        "markets": STR_LIST,
-        "platforms": STR_LIST,
-        "follower_min": INT,
-        "follower_max": INT,
-    })},
-})
-
-
-def _clean_search(s: dict) -> dict | None:
-    markets = [m for m in (s.get("markets") or []) if m in MARKETS][:3]
-    platforms = [p for p in (s.get("platforms") or []) if p in SEARCH_PLATFORMS]
-    if not s.get("title") or not markets:
-        return None
-    try:
-        fmin = max(0, int(s.get("follower_min") or 0))
-        fmax = int(s.get("follower_max") or 0) or None
-    except (TypeError, ValueError):
-        fmin, fmax = 1000, None
-    if fmax is not None and fmax <= fmin:
-        fmax = None
-    return {
-        "title": str(s["title"])[:60],
-        "description": str(s.get("description") or "")[:160],
-        "query": str(s.get("query") or "")[:40],
-        "tags": [str(t)[:30] for t in (s.get("tags") or []) if t][:3],
-        "markets": markets,
-        "platforms": platforms or list(SEARCH_PLATFORMS),
-        "follower_min": fmin,
-        "follower_max": fmax,
-    }
-
-
-async def suggest_searches(company: dict, count: int = 6, avoid_titles: list[str] | None = None) -> list[dict]:
-    allowed = ", ".join(f"{code} ({m['name']})" for code, m in MARKETS.items())
-    user = (
-        f"Company: {company.get('name', '')}\nAbout: {company.get('description') or 'n/a'}\n"
-        f"Creator types they may like: {', '.join(company.get('suggested_tags', [])) or 'n/a'}\n"
-        f"Markets they already search: {', '.join(company.get('search', {}).get('markets', [])) or 'none yet'}\n"
-        f"Allowed market codes: {allowed}\n"
-        f"Already suggested (don't repeat): {'; '.join(avoid_titles or []) or 'none'}\n\n"
-        f"Suggest {count} searches."
-    )
-    data = await _json(SEARCHES_SYSTEM, user, SEARCHES_SCHEMA, effort="low", max_tokens=4000)
-    return [c for c in (_clean_search(s) for s in data["searches"] if isinstance(s, dict)) if c][:count]
 
 
 # --- AI web scout ----------------------------------------------------------------------------

@@ -5,17 +5,20 @@ import re
 
 from typing import Annotated
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, export as exporter, linking, llm, localai, partners, rules, settings
+from . import audience, config, export as exporter, linking, llm, localai, partners, query, rules, scoring, settings
 from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
 from .metrics import agency_hint
-from .pipeline import build_match, fetch_linked, merge_ai, retry_scoring, run_job
-from .store import DEFAULT_SEARCH, new_id, now_iso, store
+from .sources import youtube
+from .pipeline import (fetch_linked, merge_ai, rebuild, rescore_company, retry_scoring, run_job, search_of,
+                       upgrade_library)
+from .store import DEFAULT_PROFILE, DEFAULT_SEARCH, GOALS, new_id, now_iso, store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -23,6 +26,7 @@ app = FastAPI(title="Scout")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 app.mount("/img", StaticFiles(directory=config.IMG_DIR), name="img")
 _tasks: dict[str, asyncio.Task] = {}  # job id -> the running search, so it can be stopped
+upgrade_library()  # creators saved by older versions get the new audience metrics and scores
 
 
 def _run(job_id: str, coro) -> None:
@@ -63,6 +67,10 @@ async def meta():
         "search_platforms": SEARCH_PLATFORMS,
         "tiers": [{"key": k, "min": lo, "max": hi, "label": label} for k, lo, hi, label in TIERS],
         "deal_types": DEAL_TYPES,
+        "goals": GOALS,
+        "fit_parts": scoring.FIT_PARTS,
+        "quality_parts": {k: label for k, (label, _) in scoring.QUALITY_PARTS.items()},
+        "reject_reasons": REJECT_REASONS,
         "sources": settings.source_status(),
         "ai": _ai_summary(),
     }
@@ -77,9 +85,35 @@ def _ai_summary() -> dict:
 
 # --- Companies -------------------------------------------------------------------------------
 
+class ProfileIn(BaseModel):
+    """Who the company wants to reach; the AI judges fit against it."""
+    website: str = ""
+    target_customer: str = ""
+    min_audience_age: int | None = None
+    price_range: str = ""
+    competitors: list[str] = []
+    values: str = ""
+    no_go: list[str] = []
+    budget_max: int | None = None
+    goal: str = "balanced"
+
+
 class CompanyIn(BaseModel):
     name: str
     description: str = ""
+    profile: ProfileIn | None = None
+
+
+def _clean_profile(p: ProfileIn | None, old: dict | None = None) -> dict:
+    if p is None:
+        return {**DEFAULT_PROFILE, **(old or {})}
+    data = p.model_dump()
+    data["goal"] = data["goal"] if data["goal"] in GOALS else "balanced"
+    data["competitors"] = [c.strip() for c in data["competitors"] if c.strip()][:30]
+    data["no_go"] = [c.strip() for c in data["no_go"] if c.strip()][:30]
+    for key in ("min_audience_age", "budget_max"):
+        data[key] = data[key] if data[key] and data[key] > 0 else None
+    return data
 
 
 class SearchIn(BaseModel):
@@ -97,8 +131,8 @@ class SearchIn(BaseModel):
 
 
 async def _fill_suggestions(company_id: str) -> None:
-    """Creator types and ready-made searches from the company description, written in the background:
-    on a local model this takes a minute or two, and nobody should wait for it to add a company."""
+    """Creator types from the company description, written in the background:
+    on a local model this takes a minute, and nobody should wait for it to add a company."""
     company = store.companies.get(company_id)
     if not company:
         return
@@ -106,9 +140,6 @@ async def _fill_suggestions(company_id: str) -> None:
         tags = await asyncio.wait_for(
             llm.suggest_tags(company["name"], company["description"], company["search"].get("tags", [])), 300)
         company["suggested_tags"] = tags or company.get("suggested_tags", [])
-        store.save()
-        searches = await asyncio.wait_for(llm.suggest_searches(company), 400)
-        company["suggested_searches"] = searches or company.get("suggested_searches", [])
     except Exception:
         logging.getLogger("scout").exception("suggestions for %s failed", company_id)
     finally:
@@ -149,8 +180,8 @@ async def create_company(body: CompanyIn):
         "id": new_id("co"),
         "name": body.name.strip(),
         "description": body.description.strip(),
+        "profile": _clean_profile(body.profile),
         "suggested_tags": [],
-        "suggested_searches": [],
         "search": dict(DEFAULT_SEARCH),
         "created_at": now_iso(),
     }
@@ -166,10 +197,29 @@ async def update_company(company_id: str, body: CompanyIn):
     changed = body.description.strip() != company.get("description")
     company["name"] = body.name.strip() or company["name"]
     company["description"] = body.description.strip()
+    old_profile = company.get("profile") or {}
+    company["profile"] = _clean_profile(body.profile, old_profile)
     if changed:
         _start_suggestions(company)
     store.save()
+    if company["profile"] != old_profile:
+        rescore_company(company)  # goal, budget or competitors change how everyone ranks
     return _public(company)
+
+
+class WebsiteIn(BaseModel):
+    url: str
+    name: str = ""
+
+
+@app.post("/api/profile-from-website")
+async def profile_from_website(body: WebsiteIn):
+    """Read the company's website and draft the brand profile (the user reviews it before saving)."""
+    if not settings.source_status()["ai"]:
+        raise HTTPException(400, "Set up an AI in Settings first")
+    if not body.url.strip():
+        raise HTTPException(400, "Enter the website address")
+    return await llm.profile_from_website(body.url.strip(), body.name.strip())
 
 
 @app.put("/api/companies/{company_id}/search")
@@ -189,17 +239,6 @@ async def delete_company(company_id: str):
     store.matches.pop(company_id, None)
     store.save()
     return {"ok": True}
-
-
-@app.post("/api/companies/{company_id}/suggest-searches")
-async def more_searches(company_id: str):
-    """More ready-made searches; new ones go first."""
-    company = _company(company_id)
-    have = company.get("suggested_searches", [])
-    fresh = await llm.suggest_searches(company, count=4, avoid_titles=[s["title"] for s in have])
-    company["suggested_searches"] = (fresh + have)[:12]
-    store.save()
-    return {"suggested_searches": company["suggested_searches"], "added": len(fresh)}
 
 
 @app.post("/api/companies/{company_id}/suggest-tags")
@@ -245,6 +284,13 @@ def card(company: dict, c: dict, m: dict, partner_idx: dict | None = None) -> di
         "country": m.get("country") or c.get("country") or "",
         "language": m.get("language") or c.get("language") or "",
         "score": m["score"],
+        "fit": m.get("fit", m["score"]),
+        "quality": m.get("quality"),
+        "checked": m.get("checked", "ai" if m.get("ai_checked") else "rules"),
+        "confidence": (m.get("confidence") or {}).get("level"),
+        "authenticity": (c.get("authenticity") or {}).get("score"),
+        "median_views": c.get("median_views"),
+        "price": c.get("price"),
         "summary": m.get("summary", ""),
         "niche": m.get("niche", ""),
         "games": m.get("games", [])[:3],
@@ -268,8 +314,10 @@ def card(company: dict, c: dict, m: dict, partner_idx: dict | None = None) -> di
 
 SORTS = {
     "match": lambda cm: -cm[1]["score"],
+    "fit": lambda cm: (-cm[1].get("fit", 0), -cm[1]["score"]),
+    "quality": lambda cm: (-(cm[1].get("quality") or 0), -cm[1]["score"]),
     "gems": lambda cm: (not cm[1].get("hidden_gem"), -cm[1]["score"]),
-    "views": lambda cm: -(cm[0].get("avg_views") or 0),
+    "views": lambda cm: -(cm[0].get("median_views") or cm[0].get("avg_views") or 0),
     "trend": lambda cm: -(cm[0].get("views_trend") if cm[0].get("views_trend") is not None else -9),
     "engagement": lambda cm: -(cm[0].get("engagement_score") or 0),
     "followers_asc": lambda cm: cm[0].get("followers") or 0,
@@ -290,11 +338,13 @@ class Filters(BaseModel):
     min_eng: int = 0
     has_email: bool = False
     gems: bool = False
+    growing: bool = False
     status: str = ""
     sort: str = "match"
     fmin: int = 0  # size slider: followers from..to (0 = no limit)
     fmax: int = 0
     job: str = ""  # show exactly what one search found, ignoring the other filters
+    ids: str = ""  # exactly these creators (the bulk selection), ignoring the other filters
 
 
 def _rows(company_id: str, f: Filters) -> list[tuple[dict, dict]]:
@@ -302,12 +352,17 @@ def _rows(company_id: str, f: Filters) -> list[tuple[dict, dict]]:
     market_langs = {lang for mk in markets_f if mk in MARKETS for lang in MARKETS[mk]["languages"]}
     tags_f = [t.strip().lower() for t in _csv(f.tags) if t.strip()]
     terms = f.q.lower().split()
+    ids_f = set(_csv(f.ids))
     rows = []
     for cid, m in store.matches.get(company_id, {}).items():
         c = store.creators.get(cid)
         if not c:
             continue
         st = m.get("status")
+        if ids_f:
+            if cid in ids_f:
+                rows.append((c, m))
+            continue
         if f.job:
             if m.get("job_id") == f.job and st != "hidden":
                 rows.append((c, m))
@@ -338,6 +393,8 @@ def _rows(company_id: str, f: Filters) -> list[tuple[dict, dict]]:
         if f.has_email and not c.get("emails"):
             continue
         if f.gems and not m.get("hidden_gem"):
+            continue
+        if f.growing and (c.get("views_trend") is None or c["views_trend"] < 0.2):
             continue
         if tags_f or terms:
             hay = _haystack(c, m)
@@ -400,18 +457,50 @@ async def creator_detail(company_id: str, creator_id: str):
     }
 
 
+# Why the team says "not a fit": one tap, and the AI learns from it on the next search.
+REJECT_REASONS = ["Wrong niche", "Audience too young", "Wrong market", "Too big or expensive", "Low-quality audience",
+                  "Brand-safety concern", "Works with a competitor", "Other"]
+
+
 class StatusIn(BaseModel):
     status: str | None
+    reason: str = ""  # with "hidden": why they're not a fit
+
+
+def _set_status(m: dict, body: StatusIn) -> None:
+    if body.status not in (None, "hidden", *SHORTLIST_STATUSES):
+        raise HTTPException(400, "Unknown status")
+    m["status"] = body.status
+    m["status_at"] = now_iso()
+    if body.status == "hidden":
+        m["feedback"] = body.reason.strip()[:120] or m.get("feedback")
+    else:
+        m.pop("feedback", None)
 
 
 @app.patch("/api/companies/{company_id}/creators/{creator_id}")
 async def set_status(company_id: str, creator_id: str, body: StatusIn):
     _, _, m = _pair(company_id, creator_id)
-    if body.status not in (None, "hidden", *SHORTLIST_STATUSES):
-        raise HTTPException(400, "Unknown status")
-    m["status"] = body.status
+    _set_status(m, body)
     store.save()
     return {"status": m["status"]}
+
+
+class BulkStatusIn(StatusIn):
+    ids: list[str]
+
+
+@app.post("/api/companies/{company_id}/creators/bulk-status")
+async def bulk_status(company_id: str, body: BulkStatusIn):
+    _company(company_id)
+    matches = store.matches.get(company_id, {})
+    done = 0
+    for cid in body.ids[:500]:
+        if cid in matches:
+            _set_status(matches[cid], body)
+            done += 1
+    store.save()
+    return {"updated": done}
 
 
 @app.post("/api/companies/{company_id}/creators/{creator_id}/ai-check")
@@ -426,9 +515,29 @@ async def ai_check_one(company_id: str, creator_id: str):
     r = results.get(creator_id)
     if not r:
         raise HTTPException(502, "The AI didn't return a result for this creator. Try again.")
-    r = merge_ai(rules.quick_score(c, company, search), r)
-    match = build_match(c, r, m.get("job_id"), m.get("search_markets") or search.get("markets", []))
-    match.update(status=m.get("status"), pitch=m.get("pitch"), created_at=m.get("created_at", match["created_at"]))
+    match = rebuild(m, c, company, merge_ai(rules.quick_score(c, company, search), r))
+    store.matches[company_id][creator_id] = match
+    store.save()
+    return match
+
+
+@app.post("/api/companies/{company_id}/creators/{creator_id}/deep")
+async def deep_evaluation(company_id: str, creator_id: str):
+    """A thorough judgement of one creator: fresh comments, descriptions, sponsorship history, a verdict."""
+    company, c, m = _pair(company_id, creator_id)
+    if not settings.source_status()["ai"]:
+        raise HTTPException(400, "No AI is set up yet. Open Settings.")
+    if c["platform"] == "youtube" and not c.get("comment_sample") and settings.source_status().get("youtube"):
+        async with httpx.AsyncClient() as http:
+            try:
+                c["comment_sample"] = await youtube.sample_comments(http, c, videos=3)
+            except Exception as e:  # the evaluation still works from posts alone
+                logging.getLogger("scout").info("comments for %s failed: %s", creator_id, e)
+    audience.assess(c)
+    search = search_of(m)
+    r = await llm.deep_evaluate(company, search, c)
+    match = rebuild(m, c, company, merge_ai(rules.quick_score(c, company, search), r))
+    match["deep"] = {"at": now_iso(), "model": r.get("model"), "sponsors_seen": r.get("sponsors_seen", [])}
     store.matches[company_id][creator_id] = match
     store.save()
     return match
@@ -457,6 +566,65 @@ async def export(company_id: str, f: Annotated[Filters, Depends()], format: str 
     return Response(exporter.to_xlsx(people),
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="{stem}.xlsx"'})
+
+
+# --- Search bar -----------------------------------------------------------------------------------
+
+class QueryIn(BaseModel):
+    q: str
+    ai: bool = True  # also let the AI read what the rules didn't understand
+
+
+@app.post("/api/companies/{company_id}/parse-query")
+async def parse_query(company_id: str, body: QueryIn):
+    """Plain words -> filters. Rules first (instant, free); the AI only for what's left over."""
+    company = _company(company_id)
+    known = list(dict.fromkeys(company.get("suggested_tags", []) + company["search"].get("tags", [])))
+    out = query.parse(body.q, known)
+    out["source"] = "rules"
+    if body.ai and len(out["rest"]) >= 4 and settings.source_status()["ai"]:
+        try:
+            ai = await asyncio.wait_for(llm.parse_query(body.q, known), 60)
+        except Exception as e:  # the rules' result is still useful
+            logging.getLogger("scout").info("AI query parse failed: %s", e)
+            return out
+        f = out["filters"]
+        tags = [str(t).strip() for t in ai.get("tags") or [] if str(t).strip()][:5]
+        f["tags"] = list(dict.fromkeys((f.get("tags") or []) + tags))
+        f["markets"] = list(dict.fromkeys((f.get("markets") or []) + [m for m in ai.get("markets") or [] if m in MARKETS]))
+        f["platforms"] = list(dict.fromkeys((f.get("platforms") or []) + [p for p in ai.get("platforms") or [] if p in SEARCH_PLATFORMS]))
+        for key in ("follower_min", "follower_max"):
+            if not f.get(key) and (ai.get(key) or 0) > 0:
+                f[key] = int(ai[key])
+        if not f.get("language") and ai.get("language") in LANGUAGES:
+            f["language"] = ai["language"]
+        for flag in ("has_email", "growing", "gems"):
+            f[flag] = f.get(flag) or bool(ai.get(flag))
+        f = {k: v for k, v in f.items() if v not in (None, [], False, "")}
+        out["filters"] = f
+        out["rest"] = str(ai.get("rest") or "").strip()
+        out["understood"] = query.describe(f)
+        out["source"] = "ai"
+    return out
+
+
+@app.get("/api/companies/{company_id}/recent-searches")
+async def recent_searches(company_id: str, limit: int = 8):
+    """The last searches run for this company, to re-run with one click (duplicates merged)."""
+    _company(company_id)
+    jobs = sorted((j for j in store.jobs.values() if j["company_id"] == company_id), key=lambda j: j["created_at"], reverse=True)
+    out, seen = [], set()
+    for j in jobs:
+        key = (tuple(sorted(j.get("tags") or [])), tuple(sorted(j["markets"])), tuple(sorted(j["platforms"])),
+               j.get("follower_min"), j.get("follower_max"), (j.get("focus") or "").lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({k: j.get(k) for k in ("id", "tags", "markets", "platforms", "follower_min", "follower_max", "focus",
+                                           "created_at", "new", "status")})
+        if len(out) >= limit:
+            break
+    return out
 
 
 # --- Past collaborations -----------------------------------------------------------------------
@@ -496,6 +664,37 @@ def _partners_summary(company: dict) -> dict | None:
         return None
     return {"file": p["file"], "imported_at": p["imported_at"], "count": len(p["items"]),
             "collabs": sum(i["collabs"] for i in p["items"])}
+
+
+@app.get("/api/companies/{company_id}/recall")
+async def recall(company_id: str):
+    """How well Scout's ranking agrees with the team's own history: which past partners are in the
+    library, and where they rank. A quick sanity check of the scoring on real data."""
+    company = _company(company_id)
+    items = (company.get("partners") or {}).get("items", [])
+    if not items:
+        return {"partners": 0}
+    idx = partners.index(company)
+    matches = store.matches.get(company_id, {})
+    ranked = sorted(((m["score"], cid) for cid, m in matches.items() if cid in store.creators), reverse=True)
+    position = {cid: i for i, (_, cid) in enumerate(ranked)}
+    found = {}
+    for cid, m in matches.items():
+        c = store.creators.get(cid)
+        p = partners.find(idx, c, m) if c else None
+        if p and (p["name"] not in found or m["score"] > found[p["name"]]["score"]):
+            found[p["name"]] = {"name": p["name"], "creator": c.get("name"), "id": cid, "score": m["score"],
+                                "fit": m.get("fit"), "rank": position.get(cid, len(ranked)) + 1}
+    rows = sorted(found.values(), key=lambda r: r["rank"])
+    top = max(1, len(ranked) // 4)
+    return {
+        "partners": len(items),
+        "library": len(ranked),
+        "found": len(rows),
+        "in_top_quarter": sum(1 for r in rows if r["rank"] <= top),
+        "median_rank_pct": round(100 * sorted(r["rank"] for r in rows)[len(rows) // 2] / len(ranked)) if rows else None,
+        "rows": rows[:30],
+    }
 
 
 @app.post("/api/companies/{company_id}/link-profiles")

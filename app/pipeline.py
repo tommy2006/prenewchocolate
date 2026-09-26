@@ -5,7 +5,7 @@ import logging
 
 import httpx
 
-from . import config, linking, llm, metrics, rules, settings
+from . import audience, config, linking, llm, metrics, rules, scoring, settings
 from .images import cache_creator_images
 from .markets import MARKETS
 from .sources import tiktok, youtube
@@ -26,14 +26,6 @@ def _step(job: dict, key: str, label: str, status: str = "running", detail: str 
     job["updated_at"] = now_iso()
 
 
-def _clamp(value, default: int) -> int:
-    """0-100 int; tolerates "85" or 85.0 from less strict models, and uses `default` for anything unreadable."""
-    try:
-        return max(0, min(100, int(float(value))))
-    except (TypeError, ValueError):
-        return default
-
-
 def outside_markets(creator: dict, markets: list[str]) -> bool:
     """True if the creator is clearly based elsewhere. Platform search only *biases* toward a country,
     so this drops obvious outsiders before paying to score them. English is kept: many local creators use it."""
@@ -43,30 +35,52 @@ def outside_markets(creator: dict, markets: list[str]) -> bool:
 
 
 def merge_ai(quick: dict, ai: dict) -> dict:
-    """The AI's judgement on top of the quick score: whatever the AI left empty keeps the rules' value."""
-    return {**quick, **{k: v for k, v in ai.items() if v not in (None, "", [])}, "ai_checked": True}
+    """The AI's judgement on top of the quick score: whatever the AI left empty keeps the rules' value.
+    Evidence: the AI's claims, plus the hard facts the rules read from the data (country, comments, email...)."""
+    merged = {**quick, **{k: v for k, v in ai.items() if v not in (None, "", [])}}
+    if ai.get("evidence"):
+        seen = {(e["dim"], e["text"].lower()) for e in ai["evidence"]}
+        merged["evidence"] = ai["evidence"] + [e for e in quick.get("evidence", [])
+                                               if e.get("fact") and (e["dim"], e["text"].lower()) not in seen]
+    merged["ai_checked"] = ai.get("ai_checked") or True
+    return merged
 
 
-def build_match(creator: dict, r: dict, job_id: str, markets: list[str] | None = None) -> dict:
-    niche = _clamp(r.get("niche_fit"), 0)
-    market = _clamp(r.get("market_fit"), 50)
-    safety = _clamp(r.get("brand_safety"), 100)
-    eng, act = creator.get("engagement_score", 40), creator.get("activity_score", 30)
-    score = 0.40 * niche + 0.20 * market + 0.25 * eng + 0.10 * act + 0.05 * safety
-    if r.get("competitor_sponsor"):
-        score -= 15
-    if safety < 50:
-        score -= 15
-    if niche < 30:  # unrelated content (news outlets, music, lifestyle) shouldn't ride on reach and engagement
-        score -= 15
+def build_match(creator: dict, r: dict, job_id: str, markets: list[str] | None, company: dict) -> dict:
+    goal = scoring.goal_of(company)
+    parts = {
+        "content": scoring.clamp(r.get("content_fit", r.get("niche_fit")), 0),
+        "audience": scoring.clamp(r.get("audience_fit"), 50),
+        "market": scoring.clamp(r.get("market_fit"), 50),
+        "brand": scoring.clamp(r.get("brand_fit"), 70),
+        "readiness": scoring.clamp(r.get("readiness"), 50),
+    }
+    safety = scoring.clamp(r.get("brand_safety"), 100)
+    competitor = bool(r.get("competitor_sponsor"))
+    q_parts = scoring.quality_parts(creator)
+    fit, quality = scoring.fit(parts, goal, competitor, safety), scoring.quality(q_parts)
+    checked = "deep" if r.get("ai_checked") == "deep" else "ai" if r.get("ai_checked") else "rules"
+    evidence = r.get("evidence") or []
+    auth = creator.get("authenticity") or {}
     followers = creator.get("followers") or 0
     return {
-        "score": _clamp(round(score), 0),
-        "niche_fit": niche,
-        "market_fit": market,
+        "score": scoring.overall(fit, quality, goal, q_parts["authenticity"]),
+        "fit": fit,
+        "quality": quality,
+        "fit_parts": parts,
+        "quality_parts": q_parts,
+        "goal": goal,
         "brand_safety": safety,
-        "engagement": eng,
-        "activity": act,
+        "competitor_sponsor": competitor,
+        "confidence": scoring.confidence(creator, checked),
+        "evidence": evidence,
+        # Plain lists for downloads and the hover text.
+        "why": [e["text"] for e in evidence if e["sign"] == "+"][:3],
+        "red_flags": [e["text"] for e in evidence if e["sign"] == "-"]
+                     + [s["text"] for s in auth.get("signals", []) if s.get("penalty", 0) >= 12],
+        "verdict": r.get("verdict", ""),
+        "collab_idea": r.get("collab_idea", ""),
+        "audience_note": r.get("audience_note", ""),
         "language": (r.get("language") or creator.get("language") or "")[:2].lower(),
         "country": (r.get("country") or creator.get("country") or "")[:2].upper(),
         "summary": r.get("summary", ""),
@@ -74,17 +88,24 @@ def build_match(creator: dict, r: dict, job_id: str, markets: list[str] | None =
         "games": [str(g) for g in (r.get("games") or []) if g][:6],
         "tags": r.get("tags", [])[:5],
         "matched_tags": r.get("matched_tags", []),
-        "why": r.get("why", [])[:3],
-        "red_flags": r.get("red_flags", []),
-        "competitor_sponsor": bool(r.get("competitor_sponsor")),
-        "hidden_gem": followers < 50_000 and eng >= 65 and niche >= 75,
-        "ai_checked": r.get("ai_checked", True),  # False = quick score from rules only
+        "hidden_gem": followers < 50_000 and parts["content"] >= 75 and q_parts["engagement"] >= 65 and q_parts["authenticity"] >= 60,
+        "ai_checked": checked != "rules",
+        "checked": checked,  # rules | ai | deep
         "status": None,
         "pitch": None,
         "job_id": job_id,
         "search_markets": markets or [],  # markets the search targeted; used when the country is unknown
         "created_at": now_iso(),
     }
+
+
+def rebuild(match: dict, creator: dict, company: dict, r: dict) -> dict:
+    """A new match from new scores, keeping what the team did with the old one (status, pitch, feedback...)."""
+    new = build_match(creator, r, match.get("job_id"), match.get("search_markets") or [], company)
+    for key in ("status", "pitch", "feedback", "created_at", "deep"):
+        if match.get(key) is not None:
+            new[key] = match[key]
+    return new
 
 
 async def _run_source(job, key, label, coro):
@@ -223,8 +244,10 @@ async def run_job(job_id: str) -> None:
 
             sem = asyncio.Semaphore(12)
             await asyncio.gather(*(cache_creator_images(http, c, sem) for c in pool))
+            await _comments_step(http, job, pool)
 
         for c in pool:
+            audience.assess(c)
             prev = store.creators.get(c["id"], {})
             c["found_via"] = sorted(set(prev.get("found_via", []) + c["found_via"]))
             c["fetched_at"] = now_iso()
@@ -244,6 +267,28 @@ async def run_job(job_id: str) -> None:
         job["finished_at"] = now_iso()
         company["last_job_id"] = job_id
         store.save()
+
+
+async def _comments_step(http, job: dict, pool: list[dict]) -> None:
+    """A sample of real comments per YouTube creator: who is watching, in what language, and whether
+    they talk back (1 quota unit per video). TikTok doesn't show comments without a login."""
+    yt = [c for c in pool if c["platform"] == "youtube"]
+    if not yt or not settings.source_status().get("youtube"):
+        return
+    label = "Reading comments (audience language and quality)"
+    _step(job, "comments", label)
+    sem = asyncio.Semaphore(8)
+
+    async def one(c):
+        async with sem:
+            try:
+                c["comment_sample"] = await youtube.sample_comments(http, c)
+            except Exception as e:  # extra detail only; never fail a search over it
+                log.info("comments for %s failed: %s", c["id"], e)
+
+    await asyncio.gather(*(one(c) for c in yt))
+    n = sum(1 for c in yt if c.get("comment_sample"))
+    _step(job, "comments", label, "done", f"comments sampled for {n} of {len(yt)} YouTube creators")
 
 
 def _stopped(job: dict) -> None:
@@ -363,7 +408,7 @@ async def score_pool(job: dict, company: dict, pool: list[dict], ai: dict) -> No
         if r["market_fit"] < MIN_MARKET_FIT:
             outside += 1
             continue
-        company_matches[c["id"]] = build_match(c, r, job["id"], job["markets"])
+        company_matches[c["id"]] = build_match(c, r, job["id"], job["markets"], company)
         ranked.append(c)
     store.save()
     job["outside"] = job.get("outside", 0) + outside
@@ -407,14 +452,11 @@ async def ai_check(job: dict, company: dict, creators: list[dict], ai: dict) -> 
                 continue
             if not c.get("language") and r.get("language"):
                 c["language"] = str(r["language"])[:2].lower()
-            old = company_matches.get(c["id"]) or {}
-            r = merge_ai(rules.quick_score(c, company, job), r)
-            match = build_match(c, r, old.get("job_id") or job_id, old.get("search_markets") or job["markets"])
-            match.update(status=old.get("status"), pitch=old.get("pitch"),
-                         created_at=old.get("created_at", match["created_at"]))
+            old = company_matches.get(c["id"]) or {"job_id": job_id, "search_markets": job["markets"]}
+            match = rebuild(old, c, company, merge_ai(rules.quick_score(c, company, job), r))
             if c["id"] in job["unscored"]:
                 job["unscored"].remove(c["id"])
-            if match["market_fit"] < MIN_MARKET_FIT:
+            if match["fit_parts"]["market"] < MIN_MARKET_FIT:
                 outside += 1
                 company_matches.pop(c["id"], None)
                 continue
@@ -464,3 +506,65 @@ async def retry_scoring(job_id: str) -> None:
         job["retried_from"] = earlier
         job["finished_at"] = now_iso()
         store.save()
+
+
+def search_of(match: dict) -> dict:
+    """The search that found this creator (its creator types and markets), for re-scoring later."""
+    job = store.jobs.get(match.get("job_id") or "")
+    if job:
+        return job
+    return {"markets": match.get("search_markets") or [], "tags": match.get("matched_tags") or []}
+
+
+def upgrade_library() -> None:
+    """Creators and matches saved by older versions: add the new audience metrics and re-score with the
+    current model, keeping every AI judgement already made (no AI calls, no quota)."""
+    changed = False
+    for c in store.creators.values():
+        if "median_views" not in c or "authenticity" not in c:
+            metrics.compute_stats(c)
+            audience.assess(c)
+            changed = True
+    for company_id, matches in store.matches.items():
+        company = store.companies.get(company_id)
+        if not company:
+            continue
+        for cid, m in list(matches.items()):
+            c = store.creators.get(cid)
+            if not c or "fit" in m:
+                continue
+            quick = rules.quick_score(c, company, search_of(m))
+            if m.get("ai_checked"):
+                # Keep the AI's old judgement: niche fit became content fit; its reasons become evidence.
+                old = {"content_fit": m.get("niche_fit"), "market_fit": m.get("market_fit"), "brand_safety": m.get("brand_safety"),
+                       "summary": m.get("summary"), "niche": m.get("niche"), "games": m.get("games"), "tags": m.get("tags"),
+                       "competitor_sponsor": m.get("competitor_sponsor"),
+                       "evidence": [scoring.evidence_item("content", "+", w, src="ai") for w in m.get("why", [])]
+                                   + [scoring.evidence_item("brand", "-", f, src="ai") for f in m.get("red_flags", [])]}
+                quick = merge_ai(quick, old)
+            matches[cid] = rebuild(m, c, company, quick)
+            changed = True
+    if changed:
+        store.save()
+
+
+def rescore_company(company: dict) -> None:
+    """The brand profile changed (goal, budget...): recompute Fit/Quality/match from the stored parts."""
+    for cid, m in store.matches.get(company["id"], {}).items():
+        c = store.creators.get(cid)
+        if not c or "fit_parts" not in m:
+            continue
+        if not m.get("ai_checked"):  # rules only: cheap to redo, and budget or competitors may have changed
+            store.matches[company["id"]][cid] = rebuild(m, c, company, rules.quick_score(c, company, search_of(m)))
+            continue
+        p = m["fit_parts"]
+        # Keep the AI's judgement, but refresh the facts read from data (budget, competitors, comments...).
+        facts = [e for e in rules.quick_score(c, company, search_of(m))["evidence"] if e.get("fact")]
+        evidence = [e for e in m.get("evidence") or [] if e.get("src") == "ai"] + facts
+        r = {"content_fit": p["content"], "audience_fit": p["audience"], "market_fit": p["market"], "brand_fit": p["brand"],
+             "readiness": p["readiness"], "brand_safety": m.get("brand_safety"), "competitor_sponsor": m.get("competitor_sponsor"),
+             "evidence": evidence, "ai_checked": m.get("checked") if m.get("checked") == "deep" else m.get("ai_checked"),
+             **{k: m.get(k) for k in ("language", "country", "summary", "niche", "games", "tags", "matched_tags",
+                                      "verdict", "collab_idea", "audience_note")}}
+        store.matches[company["id"]][cid] = rebuild(m, c, company, r)
+    store.save()

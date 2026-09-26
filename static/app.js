@@ -28,11 +28,19 @@ function fmtNum(n) {
   return String(Math.round(n));
 }
 const pct = (r) => (r == null ? "—" : (r * 100).toFixed(r < 0.1 ? 1 : 0) + "%");
-const scoreClass = (s) => (s >= 80 ? "s-hi" : s >= 60 ? "s-mid" : "s-lo");
+const scoreClass = (s) => (s == null ? "s-none" : s >= 75 ? "s-hi" : s >= 55 ? "s-mid" : "s-lo");
 const initials = (name) => (name || "?").replace(/[^\p{L}\p{N} ]/gu, "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
 function hue(str) { let h = 0; for (const ch of str || "") h = (h * 31 + ch.charCodeAt(0)) % 360; return h; }
-const placeholder = (name) => `<div class="initials" style="background:hsl(${hue(name)} 55% 45%)">${esc(initials(name))}</div>`;
+const placeholder = (name) => `<span class="initials" style="background:hsl(${hue(name)} 35% 45%)">${esc(initials(name))}</span>`;
+const avatar = (src, name) => (src ? `<img class="av" src="${esc(src)}" alt="" loading="lazy" data-name="${esc(name)}">` : placeholder(name));
 const daysAgo = (d) => (d == null ? "—" : d === 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`);
+const trendHtml = (t) => (t == null ? '<span class="muted">—</span>'
+  : `<span class="${t >= 0.2 ? "up" : t <= -0.2 ? "down" : "muted"}">${t > 0 ? "↑" : t < 0 ? "↓" : ""}${Math.abs(Math.round(t * 100))}%</span>`);
+const euro = (p) => (p ? `€${fmtNum(p.low)}–${fmtNum(p.high)}` : "—");
+function ago(iso) {
+  const days = Math.floor((Date.now() - new Date(iso)) / 864e5);
+  return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+}
 
 const ICONS = {
   youtube: '<svg class="ico" viewBox="0 0 24 24" fill="currentColor"><path d="M23 7.2a3 3 0 0 0-2.1-2.1C19 4.6 12 4.6 12 4.6s-7 0-8.9.5A3 3 0 0 0 1 7.2 31 31 0 0 0 .5 12a31 31 0 0 0 .5 4.8 3 3 0 0 0 2.1 2.1c1.9.5 8.9.5 8.9.5s7 0 8.9-.5a3 3 0 0 0 2.1-2.1 31 31 0 0 0 .5-4.8 31 31 0 0 0-.5-4.8zM9.7 15.1V8.9l5.8 3.1-5.8 3.1z"/></svg>',
@@ -45,38 +53,53 @@ const ICONS = {
   copy: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg>',
   mail: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>',
   sparkle: '<svg class="ico" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.6 5.6 1.9-5.6 1.9L12 17l-1.9-5.6L4.5 9.5l5.6-1.9zM19 15l.9 2.1 2.1.9-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>',
-  eyeOff: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3 3.8M6.3 6.3C3.8 8 2.5 12 2.5 12s3.5 7 9.5 7a9.6 9.6 0 0 0 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
+  up: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 15 6-6 6 6"/></svg>',
+  down: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>',
+  chev: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>',
 };
 
-function toast(msg, kind = "") {
+function toast(msg, kind = "", action = null) {
   const el = document.createElement("div");
   el.className = `toast ${kind}`;
   el.textContent = msg;
+  if (action) {
+    const b = document.createElement("button");
+    b.textContent = action.label;
+    b.onclick = () => { el.remove(); action.run(); };
+    el.append(b);
+  }
   $("#toasts").append(el);
-  setTimeout(() => el.remove(), kind === "err" ? 6000 : 3500);
+  setTimeout(() => el.remove(), kind === "err" ? 6000 : action ? 6000 : 3500);
 }
 
 // ---------- State ----------
 // Search criteria (saved per company, used for both filtering and new searches)
 const DEFAULT_SEARCH = { tags: [], markets: [], platforms: [], tiers: [], follower_min: null, follower_max: null, deal_types: [], avoid: [], example_creators: [], ai_scout: false };
 // ...plus filters that only narrow what's already in the library
-const DEFAULT_FILTERS = { ...DEFAULT_SEARCH, q: "", language: "", min_score: 0, min_eng: 0, has_email: false, gems: false, show_hidden: false, sort: "match" };
+const DEFAULT_FILTERS = { ...DEFAULT_SEARCH, q: "", language: "", min_score: 0, min_eng: 0, has_email: false, gems: false, growing: false, show_hidden: false, sort: "match" };
 const S = {
   meta: null,
   companies: [],
   company: null,
   view: "discover",
+  mode: "table",      // table | cards
   f: { ...DEFAULT_FILTERS },
   page: 1,
+  rows: [],           // creators on the current page
+  cursor: -1,         // keyboard position in `rows`
+  selected: new Set(),
+  panelId: null,
+  panelData: null,
   job: null,
   pollTimer: null,
   polls: 0,
-  detailId: null,
   pitch: null,
-  viewJob: null, // when set, the grid shows exactly what that search found
+  viewJob: null,      // when set, the list shows exactly what that search found
+  undo: null,         // filters before the search bar changed them
+  recent: null,
 };
 
-// ---------- Reusable chip controls ----------
+// ---------- Small controls ----------
 function chipSelect(root, options, selected, onChange) {
   const sel = new Set(selected);
   root.innerHTML = options.map((o) => `
@@ -90,7 +113,6 @@ function chipSelect(root, options, selected, onChange) {
     b.classList.toggle("on", sel.has(v));
     onChange?.(options.map((o) => o.value).filter((x) => sel.has(x)));
   };
-  return { get: () => options.map((o) => o.value).filter((x) => sel.has(x)) };
 }
 
 function chipInput(root, initial = [], placeholderText = "Type and press Enter", onChange = null) {
@@ -119,7 +141,27 @@ function chipInput(root, initial = [], placeholderText = "Type and press Enter",
     else if (e.target === root) $("input", root).focus();
   };
   render();
-  return { get: () => { const pending = $("input", root).value.trim(); if (pending) add(pending, false); return values; }, add };
+  return {
+    get: () => { const pending = $("input", root).value.trim(); if (pending) add(pending, false); return values; },
+    set: (list) => { values = [...list]; render(); changed(); },
+  };
+}
+
+// Popovers: a button with a sibling .pop. One open at a time; a click outside closes it.
+function togglePop(btn, open) {
+  const pop = btn.parentElement.querySelector(".pop");
+  open = open ?? pop.hidden;
+  closePops(pop);
+  pop.hidden = !open;
+  btn.setAttribute("aria-expanded", String(open));
+}
+function closePops(except = null) {
+  $$(".pop").forEach((p) => {
+    if (p === except) return;
+    p.hidden = true;
+    p.parentElement.querySelector("[aria-expanded]")?.setAttribute("aria-expanded", "false");
+  });
+  $$(".menu-pop").forEach((m) => m !== except && m.remove());
 }
 
 // ---------- Company ----------
@@ -127,9 +169,6 @@ function setCompany(company) {
   S.company = company;
   try { localStorage.setItem("scout.company", company.id); } catch { /* storage blocked */ }
   $("#company-name").textContent = company.name;
-  $("#company-dot").textContent = initials(company.name).slice(0, 1);
-  $("#company-dot").style.background = `hsl(${hue(company.name)} 60% 42%)`;
-  $("#company-dot").style.color = "#fff";
   $("#export-csv").href = `/api/companies/${company.id}/export?status=shortlist&format=xlsx`;
   S.f = { ...DEFAULT_FILTERS, ...(company.search || {}) };
   // Older saved searches used size chips; turn them into a slider range once.
@@ -141,21 +180,25 @@ function setCompany(company) {
   S.f.tiers = [];
   S.viewJob = null;
   S.page = 1;
+  S.selected.clear();
+  S.recent = null;
+  S.undo = null;
   $("#q").value = "";
+  $("#understood").hidden = true;
+  closePanel();
   renderFilters();
   refresh();
   stopPolling();
   $("#job").hidden = true;
   resumeJob();
+  if (company.suggesting) waitForSuggestions();
 }
 
 function renderCompanyMenu() {
-  const menu = $("#company-list");
-  menu.innerHTML = S.companies.map((c) => `
-      <button data-company="${esc(c.id)}"><span class="company-dot" style="background:hsl(${hue(c.name)} 60% 42%);color:#fff">${esc(initials(c.name).slice(0, 1))}</span>
-      ${esc(c.name)}${c.id === S.company?.id ? '<span class="check-mark">✓</span>' : ""}</button>`).join("")
+  $("#company-list").innerHTML = S.companies.map((c) => `
+      <button data-company="${esc(c.id)}">${esc(c.name)}${c.id === S.company?.id ? '<span class="check-mark">✓</span>' : ""}</button>`).join("")
     + `<div class="sep"></div>
-       <button data-act="edit-company">Edit ${esc(S.company?.name || "")}</button>
+       <button data-act="edit-company">Brand profile: ${esc(S.company?.name || "")}</button>
        <button data-act="new-company">+ Add a company</button>`;
 }
 
@@ -167,25 +210,23 @@ function toggleCompanyMenu(open) {
   $("#company-btn").setAttribute("aria-expanded", String(open));
 }
 
-// ---------- Search area ----------
+// ---------- Filter bar ----------
 // Creator type, market, platform and size both filter the library and drive "Find new creators".
 function renderFilters() {
   const sources = S.meta.sources;
   renderTagPicker();
   renderMarketPicker();
-  chipSelect($("#f-platforms"), Object.entries(S.meta.search_platforms).map(([k, label]) => ({ value: k, label, icon: ICONS[k] })),
-    S.f.platforms, (v) => { S.f.platforms = v; searchChanged(); });
+  renderPlatforms();
   renderSize();
-  renderSuggestions();
 
-  // "More options": settings for new searches
+  // "More filters": settings for new searches
   chipSelect($("#c-deals"), S.meta.deal_types.map((d) => ({ value: d, label: d })), S.f.deal_types,
     (v) => { S.f.deal_types = v; searchChanged({ reload: false }); });
   chipInput($("#c-avoid"), S.f.avoid, "e.g. Gambling, a competitor…", (v) => { S.f.avoid = v; searchChanged({ reload: false }); });
   chipInput($("#c-examples"), S.f.example_creators, "@handle or profile link", (v) => { S.f.example_creators = v; searchChanged({ reload: false }); });
   $("#c-scout").checked = S.f.ai_scout;
 
-  // "More options": filters on results
+  // "More filters": narrowing the results
   $("#f-language").innerHTML = '<option value="">Any language</option>'
     + Object.entries(S.meta.languages).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("");
   $("#f-language").value = S.f.language;
@@ -194,34 +235,87 @@ function renderFilters() {
   $("#min-score-val").textContent = S.f.min_score;
   $("#f-min-eng").value = String(S.f.min_eng);
   $("#f-has-email").checked = S.f.has_email;
+  $("#f-growing").checked = S.f.growing;
   $("#f-gems").checked = S.f.gems;
   $("#f-hidden").checked = S.f.show_hidden;
   updateAdvCount();
 
   const missing = [];
-  if (!sources.ai) missing.push("an AI key");
+  if (!sources.ai) missing.push("an AI");
   if (!sources.youtube) missing.push("a YouTube key");
   $("#setup-warning").hidden = !missing.length;
-  $("#setup-warning").innerHTML = `<span>Finish setup: add ${missing.join(", ")}.</span> <button class="btn small dark" data-act="settings">Open settings</button>`;
+  $("#setup-warning").innerHTML = `<span>Finish setup: add ${missing.join(" and ")}.</span> <button class="btn small" data-act="settings">Open settings</button>`;
   const scoutOk = S.meta.ai.web_search;
   $("#c-scout").disabled = !scoutOk;
   $("#c-scout-note").textContent = scoutOk ? "" : " Needs a Claude key in Settings (as the search or writing AI).";
 }
 
-// ---------- Size slider ----------
+function renderTagPicker() {
+  const chosen = S.f.tags;
+  $("#c-tags").innerHTML =
+    chosen.map((t, i) => `<button type="button" class="chip on" data-tag-remove="${i}" title="Remove">${esc(t)}<span class="x-mark">×</span></button>`).join("")
+    + `<span class="pop-anchor"><button type="button" class="chip ghost" id="tag-add-btn" aria-haspopup="true" aria-expanded="false">+ ${chosen.length ? "Add" : "Any type"}</button>
+       <div class="pop" id="tag-pop" hidden>${tagPopHtml()}</div></span>`;
+}
+
+function tagPopHtml() {
+  const lower = S.f.tags.map((t) => t.toLowerCase());
+  const ideas = (S.company.suggested_tags || []).filter((t) => !lower.includes(t.toLowerCase()));
+  return `<input class="pop-input" id="tag-input" placeholder="Type a creator type, press Enter" aria-label="Add a creator type">
+    <div class="chips">${ideas.map((t) => `<button type="button" class="chip" data-tag-add="${esc(t)}">${esc(t)}</button>`).join("")}</div>
+    ${S.company.suggesting ? `<p class="hint"><span class="spinner"></span> ${esc(S.meta.ai.label)} is suggesting types…</p>`
+      : S.meta.sources.ai ? `<button type="button" class="btn link" data-act="suggest-tags">${ICONS.sparkle} Suggest more types for ${esc(S.company.name)}</button>` : ""}`;
+}
+
+function addTag(tag) {
+  if (!S.f.tags.some((t) => t.toLowerCase() === tag.toLowerCase())) S.f.tags = [...S.f.tags, tag];
+  renderTagPicker();
+  searchChanged();
+}
+
+function renderMarketPicker() {
+  const chosen = S.f.markets;
+  const rest = Object.entries(S.meta.markets).filter(([k]) => !chosen.includes(k));
+  $("#c-markets").innerHTML =
+    chosen.map((m) => `<button type="button" class="chip on" data-market-remove="${m}" title="Remove">${esc(S.meta.markets[m]?.name || m)}<span class="x-mark">×</span></button>`).join("")
+    + `<select class="chip-select" id="market-add" aria-label="Add a market"><option value="">+ ${chosen.length ? "Add" : "All markets"}</option>`
+    + rest.map(([k, m]) => `<option value="${k}">${esc(m.name)}</option>`).join("") + `</select>`;
+  $("#market-add").addEventListener("change", (e) => {
+    if (!e.target.value) return;
+    S.f.markets = [...S.f.markets, e.target.value];
+    renderMarketPicker();
+    searchChanged();
+  });
+}
+
+function renderPlatforms() {
+  const opts = [["", "All"], ...Object.entries(S.meta.search_platforms)];
+  const current = S.f.platforms.length === 1 ? S.f.platforms[0] : "";
+  $("#f-platforms").innerHTML = opts.map(([k, label]) =>
+    `<button type="button" data-platform="${k}" class="${k === current ? "on" : ""}">${k ? ICONS[k] : ""}${esc(label)}</button>`).join("");
+}
+
+function updateAdvCount() {
+  const n = S.f.deal_types.length + S.f.avoid.length + S.f.example_creators.length + (S.f.ai_scout ? 1 : 0)
+    + (S.f.language ? 1 : 0) + (S.f.min_score ? 1 : 0) + (S.f.min_eng ? 1 : 0)
+    + (S.f.has_email ? 1 : 0) + (S.f.gems ? 1 : 0) + (S.f.growing ? 1 : 0) + (S.f.show_hidden ? 1 : 0);
+  $("#adv-count").hidden = !n;
+  $("#adv-count").textContent = n;
+}
+
+// ---------- Size ----------
 // Slider stops (followers). Index 0 = no minimum, last = no maximum.
 const SIZE_STEPS = [0, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 250000, 500000, 1000000, 5000000, null];
 const SIZE_PRESETS = [
   { label: "Any size", min: null, max: null },
-  { label: "Nano · under 10k", min: 1000, max: 10000 },
-  { label: "Micro · 10k–50k", min: 10000, max: 50000 },
-  { label: "Mid · 50k–250k", min: 50000, max: 250000 },
+  { label: "Nano · <10k", min: 1000, max: 10000 },
+  { label: "Micro · 10–50k", min: 10000, max: 50000 },
+  { label: "Mid · 50–250k", min: 50000, max: 250000 },
   { label: "Macro · 250k+", min: 250000, max: null },
 ];
 
 function sizeIndex(value, isMax) {
   if (value == null || (!isMax && value === 0)) return isMax ? SIZE_STEPS.length - 1 : 0;
-  // nearest stop, so saved values that aren't exact stops still land sensibly
   let best = isMax ? SIZE_STEPS.length - 2 : 1;
   SIZE_STEPS.forEach((s, i) => {
     if (s != null && Math.abs(s - value) < Math.abs((SIZE_STEPS[best] ?? Infinity) - value)) best = i;
@@ -231,9 +325,9 @@ function sizeIndex(value, isMax) {
 
 function sizeText(min, max) {
   if (!min && max == null) return "Any size";
-  if (max == null) return `${fmtNum(min)}+ followers`;
-  if (!min) return `Up to ${fmtNum(max)} followers`;
-  return `${fmtNum(min)} – ${fmtNum(max)} followers`;
+  if (max == null) return `${fmtNum(min)}+`;
+  if (!min) return `Up to ${fmtNum(max)}`;
+  return `${fmtNum(min)}–${fmtNum(max)}`;
 }
 
 function renderSize() {
@@ -244,7 +338,8 @@ function renderSize() {
   const last = SIZE_STEPS.length - 1;
   $("#range-fill").style.left = `${(lo / last) * 100}%`;
   $("#range-fill").style.width = `${((hi - lo) / last) * 100}%`;
-  $("#size-label").textContent = sizeText(S.f.follower_min, S.f.follower_max);
+  $("#size-label").textContent = sizeText(S.f.follower_min, S.f.follower_max) + (S.f.follower_min || S.f.follower_max != null ? " followers" : "");
+  $("#size-btn").classList.toggle("on", !!(S.f.follower_min || S.f.follower_max != null));
   $("#f-sizes").innerHTML = SIZE_PRESETS.map((p, i) => {
     const on = (p.min || 0) === (S.f.follower_min || 0) && (p.max ?? null) === (S.f.follower_max ?? null);
     return `<button type="button" class="chip small-chip ${on ? "on" : ""}" data-size="${i}">${esc(p.label)}</button>`;
@@ -273,30 +368,7 @@ function setSize(min, max) {
   searchChanged();
 }
 
-// ---------- Suggested searches ----------
-function sizeShort(min, max) {
-  return !min && max == null ? "any size" : max == null ? `${fmtNum(min)}+` : `${fmtNum(min || 0)}–${fmtNum(max)}`;
-}
-
-function renderSuggestions() {
-  let hidden = false;
-  try { hidden = localStorage.getItem("scout.hideSuggestions") === "1"; } catch { /* storage blocked */ }
-  const list = S.company.suggested_searches || [];
-  $("#suggest-strip").hidden = hidden;
-  $("#show-suggest").hidden = !hidden;
-  if (S.company.suggesting) waitForSuggestions();
-  $("#suggest-cards").innerHTML = (S.company.suggesting ? `<span class="hint"><span class="spinner"></span> ${esc(S.meta.ai.label)} is writing search ideas for ${esc(S.company.name)}…</span>` : "")
-    + list.map((s, i) => `
-      <button type="button" class="sugg-card" data-sugg="${i}" title="Fill in this search">
-        <b>${esc(s.title)}</b>
-        <span>${esc(s.description)}</span>
-        <small>${esc(s.markets.map((m) => S.meta.markets[m]?.name || m).join(", "))} · ${esc(s.platforms.map((p) => S.meta.platforms[p]).join(", "))} · ${esc(sizeShort(s.follower_min, s.follower_max))}</small>
-      </button>`).join("")
-    + (S.meta.sources.ai ? `<button type="button" class="sugg-card more" data-act="more-suggestions">${ICONS.sparkle}<b>More ideas</b><span>Let the AI suggest searches for ${esc(S.company.name)}</span></button>` : "")
-    + (!list.length && !S.meta.sources.ai ? `<span class="hint">Set up an AI in Settings to get suggested searches.</span>` : "");
-}
-
-// New or edited companies get their creator types and search ideas in the background: check back until they're in.
+// New companies get their creator types in the background: check back until they're in.
 function waitForSuggestions() {
   if (S.suggestTimer) return;
   const id = S.company.id;
@@ -308,96 +380,27 @@ function waitForSuggestions() {
       const fresh = S.companies.find((c) => c.id === id);
       if (!fresh) return;
       S.company = fresh;
-      if (!fresh.suggesting) { renderTagPicker(); renderSuggestions(); return; }
+      if (!fresh.suggesting) { renderTagPicker(); return; }
     } catch { /* try again */ }
     waitForSuggestions();
   }, 4000);
 }
 
-function applySuggestion(s) {
-  S.f.q = s.query || "";
-  $("#q").value = S.f.q;
-  S.f.tags = [...s.tags];
-  S.f.markets = [...s.markets];
-  const searchable = s.platforms.filter((p) => S.meta.search_platforms[p]);
-  S.f.platforms = searchable.length === Object.keys(S.meta.search_platforms).length ? [] : searchable;
-  S.f.follower_min = s.follower_min || null;
-  S.f.follower_max = s.follower_max ?? null;
-  renderFilters();
-  searchChanged();
-  const btn = $("#find-btn");
-  btn.classList.remove("pulse");
-  void btn.offsetWidth;
-  btn.classList.add("pulse");
-  toast(`“${s.title}” filled in. Press Find new creators to search the platforms.`);
-}
-
-async function moreSuggestions(button) {
+async function suggestTags(button) {
   button.disabled = true;
-  button.innerHTML = `<span class="spinner"></span><b>Thinking…</b><span>Writing new search ideas</span>`;
+  button.innerHTML = `<span class="spinner"></span> Thinking…`;
   try {
-    const r = await api(`/api/companies/${S.company.id}/suggest-searches`, { method: "POST" });
-    S.company.suggested_searches = r.suggested_searches;
-    renderSuggestions();
-    $("#suggest-cards").scrollTo({ left: 0, behavior: "smooth" });
-    toast(r.added ? `${r.added} new search ideas` : "No new ideas this time");
+    const r = await api(`/api/companies/${S.company.id}/suggest-tags`, { method: "POST" });
+    S.company.suggested_tags = r.suggested_tags;
+    toast(r.added.length ? `${r.added.length} new types` : "No new ideas this time");
   } catch (err) {
     toast(err.message, "err");
-    renderSuggestions();
   }
-}
-
-function renderTagPicker() {
-  const chosen = S.f.tags;
-  const lower = chosen.map((t) => t.toLowerCase());
-  const ideas = (S.company.suggested_tags || []).filter((t) => !lower.includes(t.toLowerCase()));
-  $("#c-tags").innerHTML =
-    chosen.map((t, i) => `<button type="button" class="chip on" data-tag-remove="${i}" aria-label="Remove ${esc(t)}">${esc(t)}<span class="x-mark">×</span></button>`).join("")
-    + ideas.map((t) => `<button type="button" class="chip sugg" data-tag-add="${esc(t)}">+ ${esc(t)}</button>`).join("")
-    + `<input class="chip-text" id="tag-input" placeholder="Type your own…" aria-label="Add a creator type">`
-    + `<button type="button" class="chip ghost" data-act="suggest-tags" title="Ask the AI for more creator types that fit ${esc(S.company.name)}">${ICONS.sparkle} ${ideas.length ? "More ideas" : "Suggest types"}</button>`;
-  $("#tag-input").addEventListener("keydown", (e) => {
-    const v = e.target.value.trim().replace(/,$/, "");
-    if ((e.key === "Enter" || e.key === ",") && v) {
-      e.preventDefault();
-      addTag(v);
-      $("#tag-input").focus();
-    }
-  });
-}
-
-function addTag(tag) {
-  if (!S.f.tags.some((t) => t.toLowerCase() === tag.toLowerCase())) S.f.tags = [...S.f.tags, tag];
-  renderTagPicker();
-  searchChanged();
-}
-
-function renderMarketPicker() {
-  const chosen = S.f.markets;
-  const rest = Object.entries(S.meta.markets).filter(([k]) => !chosen.includes(k));
-  $("#c-markets").innerHTML =
-    chosen.map((m) => `<button type="button" class="chip on" data-market-remove="${m}" aria-label="Remove ${esc(S.meta.markets[m]?.name || m)}">${esc(S.meta.markets[m]?.name || m)}<span class="x-mark">×</span></button>`).join("")
-    + `<select class="chip-select" id="market-add" aria-label="Add a market"><option value="">+ Add market</option>`
-    + rest.map(([k, m]) => `<option value="${k}">${esc(m.name)}</option>`).join("") + `</select>`
-    + (chosen.length ? "" : `<span class="hint">Showing all markets. Pick at least one to find new creators.</span>`);
-  $("#market-add").addEventListener("change", (e) => {
-    if (!e.target.value) return;
-    S.f.markets = [...S.f.markets, e.target.value];
-    renderMarketPicker();
-    searchChanged();
-  });
-}
-
-function updateAdvCount() {
-  const n = S.f.deal_types.length + S.f.avoid.length + S.f.example_creators.length + (S.f.ai_scout ? 1 : 0)
-    + (S.f.language ? 1 : 0) + (S.f.min_score ? 1 : 0) + (S.f.min_eng ? 1 : 0)
-    + (S.f.has_email ? 1 : 0) + (S.f.gems ? 1 : 0) + (S.f.show_hidden ? 1 : 0);
-  $("#adv-count").hidden = !n;
-  $("#adv-count").textContent = n;
+  if ($("#tag-pop") && !$("#tag-pop").hidden) $("#tag-pop").innerHTML = tagPopHtml();
 }
 
 let saveTimer;
-// Search criteria changed: remember them for this company, and refresh the grid.
+// Search criteria changed: remember them for this company, and refresh the list.
 function searchChanged({ reload = true } = {}) {
   clearTimeout(saveTimer);
   const body = Object.fromEntries(Object.keys(DEFAULT_SEARCH).map((k) => [k, S.f[k]]));
@@ -417,18 +420,107 @@ function filtersChanged({ debounce = false } = {}) {
   else loadCreators();
 }
 
+// ---------- Search bar: plain words -> filters ----------
+const PARSE_KEYS = ["markets", "platforms", "tags", "follower_min", "follower_max", "language", "has_email", "gems", "growing"];
+
+async function runQuery(text) {
+  text = text.trim();
+  hideRecent();
+  if (!text) {
+    S.f.q = "";
+    $("#understood").hidden = true;
+    return filtersChanged();
+  }
+  S.undo = JSON.parse(JSON.stringify(S.f));
+  let r;
+  try { r = await api(`/api/companies/${S.company.id}/parse-query`, { method: "POST", body: { q: text, ai: false } }); }
+  catch (err) { return toast(err.message, "err"); }
+  applyParsed(r, text);
+  // What the rules didn't understand: let the AI read it (a local model can take a few seconds).
+  if (r.rest && S.meta.sources.ai) {
+    showUnderstood(r, text, true);
+    try {
+      const ai = await api(`/api/companies/${S.company.id}/parse-query`, { method: "POST", body: { q: text, ai: true } });
+      if ($("#q").value.trim() === text) applyParsed(ai, text);
+    } catch { showUnderstood(r, text, false); }
+  }
+}
+
+function applyParsed(r, text) {
+  const f = r.filters;
+  const base = S.undo || S.f;
+  S.f = { ...S.f, markets: base.markets, platforms: base.platforms, tags: base.tags };
+  if (f.markets) S.f.markets = f.markets;
+  if (f.platforms) S.f.platforms = f.platforms.length === Object.keys(S.meta.search_platforms).length ? [] : f.platforms;
+  if (f.tags) S.f.tags = f.tags;
+  if (f.follower_min !== undefined || f.follower_max !== undefined) {
+    S.f.follower_min = f.follower_min || null;
+    S.f.follower_max = f.follower_max ?? null;
+  }
+  if (f.language) S.f.language = f.language;
+  if (f.has_email) S.f.has_email = true;
+  if (f.gems) S.f.gems = true;
+  if (f.growing) S.f.growing = true;
+  if (f.engaged) S.f.min_eng = 50;
+  S.f.q = r.rest || "";
+  renderFilters();
+  searchChanged();
+  showUnderstood(r, text, false);
+}
+
+function showUnderstood(r, text, thinking) {
+  const el = $("#understood");
+  const parts = [...(r.understood || [])];
+  if (r.rest) parts.push(`text “${r.rest}”`);
+  el.hidden = false;
+  el.innerHTML = (parts.length ? `<span class="muted">Searching for</span> ${parts.map((p) => `<b>${esc(p)}</b>`).join('<span class="dot-sep">·</span>')}` : `<span class="muted">Didn't recognise any filters in “${esc(text)}”.</span>`)
+    + (thinking ? ` <span class="thinking"><span class="spinner"></span> ${esc(S.meta.ai.label)} is reading the rest…</span>` : "")
+    + (S.undo ? ` <button class="btn link" data-act="undo-query">Undo</button>` : "");
+}
+
+async function showRecent() {
+  if (!S.company) return;
+  if (!S.recent) {
+    try { S.recent = await api(`/api/companies/${S.company.id}/recent-searches`); } catch { return; }
+  }
+  if (!S.recent.length || $("#q").value.trim() || document.activeElement !== $("#q")) return;
+  const el = $("#recent");
+  el.innerHTML = `<div class="recent-head">Recent searches</div>` + S.recent.map((j, i) => {
+    const bits = [j.tags?.join(", "), j.markets.map((m) => S.meta.markets[m]?.name || m).join(", "),
+      j.platforms.map((p) => S.meta.platforms[p]).join(" + "), sizeText(j.follower_min, j.follower_max), j.focus && `“${j.focus}”`].filter(Boolean);
+    return `<button type="button" data-recent="${i}"><span>${esc(bits.join(" · "))}</span><small>${ago(j.created_at)}${j.new != null ? ` · ${j.new} found` : ""}</small></button>`;
+  }).join("");
+  el.hidden = false;
+}
+function hideRecent() { $("#recent").hidden = true; }
+
+function applyRecent(j) {
+  S.f.tags = [...(j.tags || [])];
+  S.f.markets = [...j.markets];
+  S.f.platforms = j.platforms.length === Object.keys(S.meta.search_platforms).length ? [] : [...j.platforms];
+  S.f.follower_min = j.follower_min || null;
+  S.f.follower_max = j.follower_max ?? null;
+  S.f.q = j.focus || "";
+  $("#q").value = S.f.q;
+  $("#understood").hidden = true;
+  hideRecent();
+  renderFilters();
+  searchChanged();
+  toast("Search filled in. Press Find new creators to run it again.");
+}
+
+// ---------- Results ----------
 function queryString(extra = {}) {
   const f = S.f;
   const p = new URLSearchParams({
     q: f.q, tags: f.tags.join(","), platforms: f.platforms.join(","), tiers: f.tiers.join(","), markets: f.markets.join(","),
     fmin: f.follower_min || 0, fmax: f.follower_max || 0,
-    language: f.language, min_score: f.min_score, min_eng: f.min_eng, has_email: f.has_email, gems: f.gems,
-    status: f.show_hidden ? "hidden" : "", sort: f.sort, page: S.page, page_size: 30, job: S.viewJob || "", ...extra,
+    language: f.language, min_score: f.min_score, min_eng: f.min_eng, has_email: f.has_email, gems: f.gems, growing: f.growing,
+    status: f.show_hidden ? "hidden" : "", sort: f.sort, page: S.page, page_size: 50, job: S.viewJob || "", ...extra,
   });
   return p.toString();
 }
 
-// ---------- Grid ----------
 async function loadCreators({ quiet = false } = {}) {
   if (!S.company) return;
   let data;
@@ -439,51 +531,74 @@ async function loadCreators({ quiet = false } = {}) {
     return;
   }
   S.page = data.page;
-  renderGrid(data);
+  const keep = S.rows[S.cursor]?.id;
+  S.rows = data.items;
+  S.cursor = keep ? S.rows.findIndex((c) => c.id === keep) : -1;
+  renderResults(data);
 }
 
-function cardHtml(c) {
-  const img = c.cover ? `<img src="${esc(c.cover)}" alt="" loading="lazy" data-name="${esc(c.name)}">` : placeholder(c.name);
-  const place = [fmtNum(c.followers), c.country, c.niche || S.meta.tiers.find((t) => t.key === c.tier)?.label].filter(Boolean).join(" · ");
+function scoreHtml(value, c, kind) {
+  const quick = c.checked === "rules";
+  const low = c.confidence === "low";
+  const tip = kind === "fit"
+    ? `Fit ${value}: would a marketer pick them for ${S.company.name}?`
+    : `Audience quality ${value}: is the audience real and paying attention?`;
+  const note = quick ? " Quick score from rules; the AI hasn't read their posts yet." : c.checked === "deep" ? " Deep evaluation done." : "";
+  return `<span class="sc ${scoreClass(value)}${quick ? " quick" : ""}${low ? " low" : ""}" title="${esc(tip + note + (low ? " Low confidence: little data." : ""))}">${value ?? "—"}</span>`;
+}
+
+function badges(c) {
+  return [
+    c.is_new ? '<span class="tag new">New</span>' : "",
+    c.partner ? `<span class="tag partner" title="${esc(`Worked with ${S.company.name} before${c.partner === true ? "" : ` (latest: ${c.partner})`}`)}">Past partner</span>` : "",
+    c.hidden_gem ? '<span class="tag gem" title="Small, highly engaged, on-niche and authentic">Gem</span>' : "",
+    c.checked === "deep" ? '<span class="tag deep" title="Deep evaluation done">Evaluated</span>' : "",
+  ].join("");
+}
+
+function rowHtml(c, i) {
   const starred = c.status && c.status !== "hidden";
-  return `
-  <article class="card" data-id="${esc(c.id)}" tabindex="0" aria-label="${esc(c.name)}, match ${c.score}">
-    <div class="cover">
-      ${img}
-      <span class="plat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
-      <span class="score ${scoreClass(c.score)}" title="Match score">${c.score}</span>
-      ${c.is_new ? '<span class="ribbon">NEW</span>' : ""}
-      <span class="badges">
-        ${c.partner ? `<span class="badge" title="${esc(`Worked with ${S.company.name} before${c.partner === true ? "" : ` (latest: ${c.partner})`}`)}">🤝</span>` : ""}
-        ${c.hidden_gem ? '<span class="badge" title="Hidden gem: small, highly engaged and on-niche">💎</span>' : ""}
-        ${starred ? `<span class="badge star" title="On your shortlist">${ICONS.starOn}</span>` : ""}
-      </span>
-      <div class="hover">
-        <p>${esc(c.summary)}</p>
-        ${c.games?.length ? `<p class="games">🎮 ${esc(c.games.join(", "))}</p>` : ""}
-        ${c.avg_views != null ? `<p class="games">${fmtNum(c.avg_views)} avg views${c.views_window ? ` · ${esc(c.views_window)}` : ""}${c.trend ? ` · ${esc(c.trend.toLowerCase())}` : ""}</p>` : ""}
-        <div class="tags">${c.tags.map((t) => `<span>${esc(t)}</span>`).join("")}</div>
-        <span class="more">Click for details →</span>
-      </div>
-    </div>
-    <div class="meta">
-      <h3>${esc(c.name)}</h3>
-      <p>${esc(place)}</p>
-    </div>
+  const market = [c.country, c.language].filter(Boolean).join(" · ") || "—";
+  return `<tr data-id="${esc(c.id)}" data-i="${i}" class="${i === S.cursor ? "cur" : ""} ${S.selected.has(c.id) ? "sel" : ""} ${S.panelId === c.id ? "open" : ""}">
+    <td class="c-sel"><input type="checkbox" data-select="${esc(c.id)}" ${S.selected.has(c.id) ? "checked" : ""} aria-label="Select ${esc(c.name)}"></td>
+    <td class="c-who"><div class="who">${avatar(c.avatar, c.name)}
+      <div class="who-text"><div class="who-name"><span class="plat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span><b>${esc(c.name)}</b>${badges(c)}</div>
+      <div class="who-sum">${esc(c.summary || c.niche || "")}</div></div></div></td>
+    <td class="num">${scoreHtml(c.fit, c, "fit")}</td>
+    <td class="num">${scoreHtml(c.quality, c, "quality")}</td>
+    <td class="num">${fmtNum(c.followers)}</td>
+    <td class="num" title="Median views per post${c.views_window ? `, ${esc(c.views_window)}` : ""}">${fmtNum(c.median_views ?? c.avg_views)}</td>
+    <td class="num">${trendHtml(c.views_trend)}</td>
+    <td class="c-mkt">${esc(market)}</td>
+    <td class="c-icon">${c.has_email ? `<span class="mail" title="${esc(c.email || "Has email")}">${ICONS.mail}</span>` : ""}</td>
+    <td class="c-icon"><button class="star ${starred ? "on" : ""}" data-star="${esc(c.id)}" title="${starred ? "On shortlist" : "Add to shortlist"} (s)" aria-label="Shortlist">${starred ? ICONS.starOn : ICONS.star}</button></td>
+  </tr>`;
+}
+
+function cardHtml(c, i) {
+  const starred = c.status && c.status !== "hidden";
+  return `<article class="card ${i === S.cursor ? "cur" : ""} ${S.panelId === c.id ? "open" : ""}" data-id="${esc(c.id)}" data-i="${i}" tabindex="0">
+    <div class="card-top">${avatar(c.avatar, c.name)}
+      <div class="card-id"><b>${esc(c.name)}</b><small><span class="plat plat-${c.platform}">${ICONS[c.platform]}</span>${fmtNum(c.followers)} · ${esc(c.country || "—")}</small></div>
+      <button class="star ${starred ? "on" : ""}" data-star="${esc(c.id)}" aria-label="Shortlist">${starred ? ICONS.starOn : ICONS.star}</button></div>
+    <div class="card-scores"><span>Fit ${scoreHtml(c.fit, c, "fit")}</span><span>Quality ${scoreHtml(c.quality, c, "quality")}</span>
+      <span class="muted">${fmtNum(c.median_views ?? c.avg_views)} views ${trendHtml(c.views_trend)}</span></div>
+    <p class="card-sum">${esc(c.summary)}</p>
+    <div class="card-tags">${badges(c)}</div>
   </article>`;
 }
 
-function renderGrid(data) {
+function renderResults(data) {
   const grid = $("#grid");
-  const filtered = S.f.q || S.f.tags.length || S.f.platforms.length || S.f.tiers.length || S.f.markets.length || S.f.language
-    || S.f.min_score || S.f.min_eng || S.f.has_email || S.f.gems || S.f.show_hidden;
+  const filtered = S.f.q || S.f.tags.length || S.f.platforms.length || S.f.markets.length || S.f.language || S.f.follower_min || S.f.follower_max != null
+    || S.f.min_score || S.f.min_eng || S.f.has_email || S.f.gems || S.f.growing || S.f.show_hidden;
+  $("#downloads").innerHTML = downloadLinks(data.total);
   if (!data.library_size) {
     $("#results-count").innerHTML = "";
     grid.innerHTML = `
       <div class="empty">
         <h2>No creators yet for ${esc(S.company.name)}</h2>
-        <p>Pick the creator types and markets you want above, then press <b>Find new creators</b>. Scout searches YouTube and TikTok in each market's own language and ranks small, genuinely engaged creators first.</p>
-        <button class="btn primary big" data-act="find">${ICONS.sparkle} Find new creators</button>
+        <p>Describe who you want above (or pick types and markets), then press <b>Find new creators</b>. Scout searches YouTube and TikTok in each market's own language and ranks small, genuinely engaged creators first.</p>
       </div>`;
     $("#pager").innerHTML = "";
     return;
@@ -491,42 +606,60 @@ function renderGrid(data) {
   if (S.viewJob) {
     const job = S.job && S.job.id === S.viewJob ? S.job : null;
     const running = job && (job.status === "running" || job.status === "queued");
-    $("#results-count").innerHTML = `<b>${data.total}</b> ${data.total === 1 ? "creator" : "creators"} found by this search`
-      + ` · <button class="btn link" data-act="show-all">Show all saved creators (${data.library_size})</button>` + downloadLinks(data.total);
+    $("#results-count").innerHTML = `<b>${data.total}</b> found by this search · <button class="btn link" data-act="show-all">Show all ${data.library_size} saved</button>`;
     if (!data.items.length) {
       grid.innerHTML = running
         ? `<div class="empty"><h2>Scouting…</h2><p>Creators appear here as they're ranked.</p></div>`
         : `<div class="empty"><h2>No new creators this time</h2><p>This search didn't find new creators that fit${job?.outside ? ` (${job.outside} were outside your markets)` : ""}. Try other creator types, a bigger size range, or another platform.</p>
           <button class="btn" data-act="show-all">Show all saved creators</button></div>`;
-    } else {
-      grid.innerHTML = data.items.map(cardHtml).join("");
+      $("#pager").innerHTML = "";
+      return;
     }
-    renderPager(data.page, data.pages);
-    return;
-  }
-  $("#results-count").innerHTML = `<b>${data.total}</b> ${data.total === 1 ? "creator" : "creators"}${filtered ? " match your filters" : ""}`
-    + (filtered ? ` · <button class="btn link" data-act="reset-filters">Clear</button>` : "") + downloadLinks(data.total);
-  if (!data.items.length) {
-    grid.innerHTML = `<div class="empty"><h2>Nothing here yet</h2><p>None of your saved creators match this. Press <b>Find new creators</b> to search the platforms for exactly this, or clear the filters.</p>
-      <button class="btn primary" data-act="find">${ICONS.sparkle} Find new creators</button> <button class="btn" data-act="reset-filters">Clear filters</button></div>`;
   } else {
+    $("#results-count").innerHTML = `<b>${data.total}</b> ${data.total === 1 ? "creator" : "creators"}${filtered ? " match" : ""}`
+      + (filtered ? ` · <button class="btn link" data-act="reset-filters">Clear filters</button>` : "");
+    if (!data.items.length) {
+      grid.innerHTML = `<div class="empty"><h2>Nothing saved matches this</h2><p>Press <b>Find new creators</b> to search the platforms for exactly this, or clear the filters.</p>
+        <button class="btn primary" data-act="find">Find new creators</button> <button class="btn" data-act="reset-filters">Clear filters</button></div>`;
+      $("#pager").innerHTML = "";
+      return;
+    }
+  }
+  if (S.mode === "cards" || window.innerWidth < 700) {  // a table doesn't fit a phone
+    grid.className = "cards";
     grid.innerHTML = data.items.map(cardHtml).join("");
+  } else {
+    grid.className = "";
+    const all = data.items.length && data.items.every((c) => S.selected.has(c.id));
+    grid.innerHTML = `<div class="table-wrap"><table class="list">
+      <thead><tr>
+        <th class="c-sel"><input type="checkbox" id="sel-all" ${all ? "checked" : ""} aria-label="Select all on this page"></th>
+        <th>Creator</th>
+        <th class="num" title="Would a marketer pick them for this brand? Content, audience, market, brand and readiness.">Fit</th>
+        <th class="num" title="Is the audience real and paying attention? Authenticity, engagement, consistency, activity, momentum.">Quality</th>
+        <th class="num">Followers</th>
+        <th class="num" title="Median views per post, last 30 days">Views</th>
+        <th class="num" title="Views in the last 30 days vs the 60 before">Trend</th>
+        <th>Market</th>
+        <th class="c-icon" title="Has a public email">${ICONS.mail}</th>
+        <th class="c-icon"></th>
+      </tr></thead>
+      <tbody>${data.items.map(rowHtml).join("")}</tbody></table></div>`;
   }
   renderPager(data.page, data.pages);
 }
 
-// Excel / CSV of exactly what the grid shows (all pages)
+// Excel / CSV of exactly what the list shows (all pages)
 function downloadLinks(total) {
   if (!total) return "";
-  const qs = queryString({ page: "", page_size: "" });
-  const base = `/api/companies/${S.company.id}/export?${qs}`;
-  return `<span class="downloads">Download <a class="btn small" href="${base}&format=xlsx" download>Excel</a><a class="btn small" href="${base}&format=csv" download>CSV</a></span>`;
+  const base = `/api/companies/${S.company.id}/export?${queryString({ page: "", page_size: "" })}`;
+  return `<a class="btn small" href="${base}&format=xlsx" download>Excel</a><a class="btn small" href="${base}&format=csv" download>CSV</a>`;
 }
 
 function renderPager(page, pages) {
   const el = $("#pager");
   if (pages <= 1) { el.innerHTML = ""; return; }
-  const nums = new Set([1, pages, page, page - 1, page + 1, page - 2, page + 2].filter((n) => n >= 1 && n <= pages));
+  const nums = new Set([1, pages, page, page - 1, page + 1].filter((n) => n >= 1 && n <= pages));
   const sorted = [...nums].sort((a, b) => a - b);
   let html = `<button data-page="${page - 1}" ${page === 1 ? "disabled" : ""} aria-label="Previous page">‹</button>`;
   sorted.forEach((n, i) => {
@@ -537,130 +670,244 @@ function renderPager(page, pages) {
   el.innerHTML = html;
 }
 
-// ---------- Detail ----------
-async function openDetail(id) {
-  S.detailId = id;
-  const dlg = $("#detail");
-  dlg.innerHTML = `<div class="loading-line" style="padding:40px"><span class="spinner"></span>Loading…</div>`;
-  if (!dlg.open) dlg.showModal();
+// ---------- Selection, bulk actions, keyboard ----------
+function toggleSelect(id, on) {
+  on = on ?? !S.selected.has(id);
+  on ? S.selected.add(id) : S.selected.delete(id);
+  $$(`[data-id="${CSS.escape(id)}"]`).forEach((r) => r.classList.toggle("sel", on));
+  const box = $(`[data-select="${CSS.escape(id)}"]`);
+  if (box) box.checked = on;
+  renderBulk();
+}
+
+function renderBulk() {
+  const n = S.selected.size;
+  const bar = $("#bulkbar");
+  bar.hidden = !n || S.view !== "discover";
+  if (!n) return;
+  const ids = [...S.selected].join(",");
+  const base = `/api/companies/${S.company.id}/export?ids=${encodeURIComponent(ids)}&status=any`;
+  bar.innerHTML = `<b>${n} selected</b>
+    <button class="btn small" data-act="bulk-shortlist">${ICONS.star} Shortlist</button>
+    <span class="pop-anchor"><button class="btn small" data-act="bulk-hide-menu">Not a fit ${ICONS.chev}</button></span>
+    <a class="btn small" href="${base}&format=xlsx" download>Download Excel</a>
+    <button class="btn link" data-act="bulk-clear">Clear</button>`;
+}
+
+async function bulkStatus(status, reason = "") {
+  const ids = [...S.selected];
+  try {
+    await api(`/api/companies/${S.company.id}/creators/bulk-status`, { method: "POST", body: { ids, status, reason } });
+    toast(status === "hidden" ? `${ids.length} hidden` : `${ids.length} added to the shortlist`, "ok");
+    S.selected.clear();
+    renderBulk();
+    loadCreators({ quiet: true });
+    updateShortlistCount();
+  } catch (err) { toast(err.message, "err"); }
+}
+
+function reasonMenu(anchor, onPick) {
+  closePops();
+  const menu = document.createElement("div");
+  menu.className = "menu-pop";
+  menu.innerHTML = `<div class="menu-head">Why not a fit? <span class="muted">(the AI learns from it)</span></div>`
+    + S.meta.reject_reasons.map((r) => `<button type="button" data-reason="${esc(r)}">${esc(r)}</button>`).join("")
+    + `<button type="button" data-reason="" class="muted">Skip reason</button>`;
+  const host = anchor.closest(".pop-anchor, .p-actions, .bulkbar") || document.body;
+  host.append(menu);
+  if (host.classList.contains("p-actions")) menu.style.left = `${anchor.offsetLeft}px`;
+  menu.onclick = (e) => {
+    const b = e.target.closest("[data-reason]");
+    if (!b) return;
+    e.stopPropagation();
+    menu.remove();
+    onPick(b.dataset.reason);
+  };
+  $("button", menu)?.focus();
+}
+
+function moveCursor(delta) {
+  if (!S.rows.length) return;
+  S.cursor = Math.max(0, Math.min(S.rows.length - 1, (S.cursor < 0 ? (delta > 0 ? -1 : 0) : S.cursor) + delta));
+  markCursor();
+  if (S.panelId) openPanel(S.rows[S.cursor].id);
+}
+
+function markCursor() {
+  $$("#grid [data-i]").forEach((el) => el.classList.toggle("cur", +el.dataset.i === S.cursor));
+  $(`#grid [data-i="${S.cursor}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+async function toggleStar(id) {
+  const c = S.rows.find((r) => r.id === id) || (S.panelData?.card.id === id ? S.panelData.card : null);
+  const on = c && c.status && c.status !== "hidden";
+  try {
+    await setStatus(id, on ? null : "shortlisted");
+    toast(on ? "Removed from shortlist" : "Added to shortlist", on ? "" : "ok");
+    if (S.view === "shortlist") renderShortlist(); else loadCreators({ quiet: true });
+    if (S.panelId === id) openPanel(id);
+  } catch (err) { toast(err.message, "err"); }
+}
+
+async function hideCreator(id, reason) {
+  try {
+    await setStatus(id, "hidden", reason);
+    toast("Hidden: not a fit" + (reason ? ` (${reason.toLowerCase()})` : ""), "", { label: "Undo", run: async () => { await setStatus(id, null); loadCreators({ quiet: true }); } });
+    const i = S.rows.findIndex((r) => r.id === id);
+    await loadCreators({ quiet: true });
+    if (S.panelId === id) {
+      const next = S.rows[Math.min(i, S.rows.length - 1)];
+      if (next) { S.cursor = S.rows.indexOf(next); markCursor(); openPanel(next.id); } else closePanel();
+    }
+  } catch (err) { toast(err.message, "err"); }
+}
+
+async function setStatus(id, status, reason = "") {
+  await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(id)}`, { method: "PATCH", body: { status, reason } });
+  updateShortlistCount();
+}
+
+// ---------- Creator panel ----------
+async function openPanel(id) {
+  S.panelId = id;
+  const panel = $("#panel");
+  panel.hidden = false;
+  document.body.classList.add("with-panel");
+  $$("#grid [data-id]").forEach((el) => el.classList.toggle("open", el.dataset.id === id));
+  if (!S.panelData || S.panelData.card.id !== id) panel.innerHTML = `<div class="loading-line" style="padding:32px"><span class="spinner"></span>Loading…</div>`;
   try {
     const d = await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(id)}`);
-    renderDetail(d);
+    if (S.panelId !== id) return; // moved on meanwhile
+    renderPanel(d);
   } catch (e) {
-    dlg.close();
+    closePanel();
     toast(e.message, "err");
   }
 }
 
-function barRow(label, value, hint) {
-  return `<div class="barrow" title="${esc(hint)}"><span>${label}</span><div class="track"><i style="width:${value}%"></i></div><b>${value}</b></div>`;
+function closePanel() {
+  S.panelId = null;
+  S.panelData = null;
+  $("#panel").hidden = true;
+  document.body.classList.remove("with-panel");
+  $$("#grid [data-id].open").forEach((el) => el.classList.remove("open"));
 }
 
-function renderDetail({ card: c, creator: cr, match: m, linked = [], partner, agency }) {
-  const dlg = $("#detail");
-  const lang = S.meta.languages[m.language] || m.language || "Unknown language";
-  const country = S.meta.markets[c.country]?.name || c.country || "Unknown location";
-  const tier = S.meta.tiers.find((t) => t.key === cr.tier)?.label;
-  const vs = cr.engagement_vs_typical;
-  const engHint = cr.platform === "instagram" ? "likes + comments per follower" : "likes + comments per view";
+function claimHtml(e) {
+  const cites = (e.posts || []).map((p) => `<a href="${esc(p.url)}" target="_blank" rel="noopener" title="Open this post">${esc(p.title || "post")}</a>`).join("");
+  const quotes = (e.quotes || []).map((q) => `<q>${esc(q)}</q>`).join("");
+  return `<li class="${e.sign === "-" ? "minus" : "plus"}"><span class="sign">${e.sign === "-" ? "−" : "+"}</span>
+    <div>${esc(e.text)}${cites ? `<div class="cites">${cites}</div>` : ""}${quotes}</div></li>`;
+}
+
+function barHtml(value) {
+  return `<div class="track"><i class="${scoreClass(value)}" style="width:${value}%"></i></div>`;
+}
+
+function renderPanel(d) {
+  S.panelData = d;
+  const { card: c, creator: cr, match: m, linked = [], partner, agency } = d;
+  const lang = S.meta.languages[m.language] || m.language || "";
+  const country = S.meta.markets[c.country]?.name || c.country || "";
   const starred = m.status && m.status !== "hidden";
+  const auth = cr.authenticity || {};
+  const aud = cr.audience || {};
+  const conf = m.confidence || { level: "low", notes: [] };
+  const ev = m.evidence || [];
   const posts = (cr.recent_posts || []).slice(0, 6);
-  const cover = c.cover ? `<img src="${esc(c.cover)}" alt="" data-name="${esc(c.name)}">` : placeholder(c.name);
   S.pitch = m.pitch;
+  const i = S.rows.findIndex((r) => r.id === c.id);
 
-  dlg.innerHTML = `
-    <div class="detail">
-      <aside>
-        <div class="detail-cover">${cover}
-          <span class="plat plat-${c.platform}">${ICONS[c.platform]}</span>
-        </div>
-        <div class="detail-side">
-          <button class="btn ${starred ? "dark" : "primary"}" data-act="toggle-shortlist" data-id="${esc(c.id)}" data-status="${esc(m.status || "")}">
-            ${starred ? ICONS.starOn + " On shortlist" : ICONS.star + " Add to shortlist"}</button>
-          <a class="btn" href="${esc(cr.url)}" target="_blank" rel="noopener">${ICONS.ext} Open ${esc(S.meta.platforms[c.platform])} profile</a>
-          <button class="btn link" data-act="toggle-hide" data-id="${esc(c.id)}" data-status="${esc(m.status || "")}">
-            ${m.status === "hidden" ? "Unhide this creator" : "Not a fit, hide"}</button>
-        </div>
-      </aside>
-      <div class="detail-main">
-        <div class="d-title">
-          <div>
-            <h2>${esc(c.name)}</h2>
-            <div class="d-sub">
-              <span>${ICONS[c.platform]} ${esc(cr.handle || "")}</span>
-              <span>${esc(country)}</span><span>${esc(lang)}</span>
-              ${m.niche ? `<span class="pill">${esc(m.niche)}</span>` : ""}
-              ${m.games?.length ? `<span class="pill">🎮 ${esc(m.games.join(", "))}</span>` : ""}
-              ${partner ? `<span class="pill partner" title="From your collaboration tracker">🤝 Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : " before"}</span>` : ""}
-              ${m.hidden_gem ? '<span class="pill gem">💎 Hidden gem</span>' : ""}
-              ${cr.verified ? '<span class="pill">Verified</span>' : ""}
-            </div>
-          </div>
-          <div class="bigscore"><b class="${scoreClass(m.score)}">${m.score}</b><span>Match</span></div>
-          <button class="x" data-act="close" aria-label="Close">${ICONS.x}</button>
-        </div>
+  const dims = Object.entries(S.meta.fit_parts).map(([k, label]) => {
+    const v = m.fit_parts?.[k] ?? 0;
+    const claims = ev.filter((e) => e.dim === k);
+    return `<div class="dim"><div class="dim-head"><span>${esc(label)}</span>${barHtml(v)}<b>${v}</b></div>
+      ${claims.length ? `<ul class="claims">${claims.map(claimHtml).join("")}</ul>` : ""}</div>`;
+  }).join("");
 
-        <div class="stats">
-          <div class="stat"><b>${fmtNum(cr.followers)}</b><span>${c.platform === "youtube" ? "subscribers" : "followers"}${tier ? " · " + tier : ""}</span></div>
-          <div class="stat" title="${esc(`Average views per ${cr.views_basis === "videos, Shorts excluded" ? "video (Shorts excluded)" : "post"}, posts younger than 2 days left out`)}">
-            <b>${fmtNum(cr.avg_views)}</b><span>avg views${cr.views_window ? ` · ${esc(cr.views_window)}` : ""}</span></div>
-          <div class="stat" title="${esc(engHint)}"><b>${pct(cr.engagement_rate)}</b><span>engagement${vs ? ` · ${vs}× typical` : ""}</span></div>
-          <div class="stat" title="Average views in the last 30 days compared with the 60 days before">
-            <b class="${cr.views_trend > 0.2 ? "up" : cr.views_trend < -0.2 ? "down" : ""}">${cr.views_trend != null ? `${cr.views_trend > 0 ? "↑" : cr.views_trend < 0 ? "↓" : ""} ${Math.abs(Math.round(cr.views_trend * 100))}%` : "—"}</b>
-            <span>views trend${cr.trend ? " · " + esc(cr.trend.toLowerCase()) : ""}</span></div>
-        </div>
-        <p class="activity">Posts ${cr.posts_per_month ?? "—"} times a month · last post ${daysAgo(cr.days_since_last_post)}${cr.views_basis === "videos, Shorts excluded" ? " · views counted on normal videos, Shorts excluded" : ""}${cr.shorts_share ? ` · ${Math.round(cr.shorts_share * 100)}% of recent uploads are Shorts` : ""}</p>
+  const qparts = Object.entries(S.meta.quality_parts).map(([k, label]) => {
+    const v = m.quality_parts?.[k] ?? 0;
+    return `<div class="qpart"><span>${esc(label)}</span>${barHtml(v)}<b>${v}</b></div>`;
+  }).join("");
+  const signals = (auth.signals || []).map((s) => `<li class="${s.kind === "good" ? "plus" : "minus"}"><span class="sign">${s.kind === "good" ? "✓" : "!"}</span><div>${esc(s.text)}</div></li>`).join("");
+  const langs = Object.entries(aud.languages || {}).map(([k, v]) => `${esc(S.meta.languages[k] || k)} ${Math.round(v * 100)}%`).join(" · ");
+  const consistency = cr.consistency != null ? `${Math.round(cr.consistency * 100)}% of recent posts reach at least half their average views${cr.views_spread >= 2 ? " (the average is carried by a few hits)" : ""}` : "";
 
-        ${linked.length ? `<div class="also">${linked.map((o) => `<a href="${esc(o.url)}" target="_blank" rel="noopener" title="${esc(o.name)} ${esc(o.handle || "")}">
-          ${ICONS[o.platform]} <b>Also on ${esc(S.meta.platforms[o.platform])}</b>
-          <span>${fmtNum(o.followers)} ${o.platform === "youtube" ? "subscribers" : "followers"}${o.avg_views != null ? ` · ${fmtNum(o.avg_views)} avg views${o.views_window ? ` · ${esc(o.views_window)}` : ""}` : ""}</span></a>`).join("")}</div>` : ""}
-
-        <p class="summary">${esc(m.summary)}</p>
-        ${m.ai_checked === false ? `<p class="quick-note">⚡ Quick score from their stats and post titles. The AI hasn't read their posts yet${S.meta.sources.ai ? ` <button class="btn small" data-act="ai-check" data-id="${esc(c.id)}">Check with ${esc(S.meta.ai.label)}</button>` : ""}</p>` : ""}
-        <div class="tagline">${(m.tags || []).map((t) => `<span>${esc(t)}</span>`).join("")}</div>
-
-        <div class="cols">
-          <div class="section">
-            <h4>Why they fit</h4>
-            <ul>${(m.why || []).map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
-            ${m.red_flags?.length ? `<h4 style="margin-top:12px">Watch out</h4><ul class="flags">${m.red_flags.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
-          </div>
-          <div class="section">
-            <h4>Score breakdown</h4>
-            ${barRow("Niche fit", m.niche_fit, "How closely their recent content matches the creator types you picked (AI)")}
-            ${barRow("Market", m.market_fit, "How likely their audience is in your target markets (AI)")}
-            ${barRow("Engagement", m.engagement, "Engagement and reach compared with typical accounts of the same size")}
-            ${barRow("Activity", m.activity, "How recently and how often they post")}
-            ${m.brand_safety < 80 ? barRow("Brand safety", m.brand_safety, "Lower means potential brand-safety concerns") : ""}
-          </div>
-        </div>
-
-        ${posts.length ? `<div class="section"><h4>Recent posts</h4><div class="posts">
-          ${posts.map((p) => `<a class="post" href="${esc(p.url || cr.url)}" target="_blank" rel="noopener" title="${esc(p.title)}">
-            ${p.thumb ? `<img src="${esc(p.thumb)}" alt="" loading="lazy">` : `<div class="ptitle">${esc((p.title || "").slice(0, 90))}</div>`}
-            <span>${p.views != null ? fmtNum(p.views) + " views" : fmtNum(p.likes) + " likes"}</span></a>`).join("")}
-        </div></div>` : ""}
-
-        <div class="section">
-          <h4>Contact</h4>
-          <div class="contact">
-            ${cr.emails?.length ? cr.emails.map((e) => `<code>${esc(e)}</code><button class="btn small" data-act="copy" data-text="${esc(e)}">${ICONS.copy} Copy</button>`).join("")
-              : `<span class="muted">No public email found. Message them on ${esc(S.meta.platforms[c.platform])}${cr.links?.length ? " or via their link" : ""}.</span>`}
-            ${agency ? `<span class="pill" title="A company email that isn't the creator's own, or management mentioned in their bio">Likely via agency / management</span>` : ""}
-            ${Object.entries(cr.socials || {}).map(([k, l]) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS[k] || ICONS.ext} ${esc(k[0].toUpperCase() + k.slice(1))}</a>`).join("")}
-            ${(cr.links || []).filter((l) => !Object.values(cr.socials || {}).includes(l)).slice(0, 3).map((l) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS.ext} ${esc(l.replace(/^https?:\/\/(www\.)?/, "").slice(0, 32))}</a>`).join("")}
-          </div>
-        </div>
-
-        <div class="section">
-          <h4>Outreach</h4>
-          <div id="pitch-area">${m.pitch ? pitchHtml(m.pitch, cr) : `
-            <button class="btn primary" data-act="pitch" data-id="${esc(c.id)}">${ICONS.mail} Draft a message in ${esc(lang)}</button>`}
-          </div>
-        </div>
-
-        ${cr.found_via?.length ? `<p class="via">How we found them: ${cr.found_via.map(esc).join(" · ")}</p>` : ""}
+  $("#panel").innerHTML = `
+    <div class="p-head">
+      ${avatar(c.avatar, c.name)}
+      <div class="p-title">
+        <h2>${esc(c.name)}</h2>
+        <div class="p-sub"><span class="plat plat-${c.platform}">${ICONS[c.platform]}</span><a href="${esc(cr.url)}" target="_blank" rel="noopener">${esc(cr.handle || S.meta.platforms[c.platform])}</a>
+          ${country ? `<span>${esc(country)}</span>` : ""}${lang ? `<span>${esc(lang)}</span>` : ""}<span>${fmtNum(cr.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}</span></div>
+        <div class="p-badges">${badges(c)}${partner ? `<span class="tag partner">Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? '<span class="tag">Hidden</span>' : ""}</div>
       </div>
+      <div class="p-nav">
+        <button class="icon-btn small" data-act="panel-prev" ${i <= 0 ? "disabled" : ""} title="Previous (↑)">${ICONS.up}</button>
+        <button class="icon-btn small" data-act="panel-next" ${i < 0 || i >= S.rows.length - 1 ? "disabled" : ""} title="Next (↓)">${ICONS.down}</button>
+        <button class="icon-btn small" data-act="panel-close" title="Close (Esc)">${ICONS.x}</button>
+      </div>
+    </div>
+    <div class="p-actions">
+      <button class="btn small ${starred ? "dark" : "primary"}" data-act="panel-star">${starred ? ICONS.starOn + " On shortlist" : ICONS.star + " Shortlist"}</button>
+      ${m.status === "hidden" ? `<button class="btn small" data-act="panel-unhide">Unhide</button>` : `<button class="btn small" data-act="panel-hide">Not a fit ${ICONS.chev}</button>`}
+      <a class="btn small" href="${esc(cr.url)}" target="_blank" rel="noopener">${ICONS.ext} Profile</a>
+      <span class="spacer"></span>
+      ${S.meta.sources.ai ? `<button class="btn small ${m.checked === "deep" ? "" : "accent"}" data-act="deep" title="Reads their posts, descriptions and viewer comments, and judges fit like a marketer (uses the writing AI)">${ICONS.sparkle} ${m.checked === "deep" ? "Re-evaluate" : "Deep evaluation"}</button>` : ""}
+    </div>
+    <div class="p-body">
+      ${m.verdict ? `<p class="verdict">${esc(m.verdict)}</p>` : `<p class="p-summary">${esc(m.summary)}</p>`}
+      ${m.audience_note || m.collab_idea ? `<dl class="deep-notes">
+        ${m.audience_note ? `<dt>Audience</dt><dd>${esc(m.audience_note)}</dd>` : ""}
+        ${m.collab_idea ? `<dt>Idea</dt><dd>${esc(m.collab_idea)}</dd>` : ""}
+        ${m.deep?.sponsors_seen?.length ? `<dt>Sponsors</dt><dd>${esc(m.deep.sponsors_seen.join(", "))}</dd>` : ""}</dl>` : ""}
+
+      <div class="scores">
+        <div class="scorebox"><b class="${scoreClass(m.fit)}">${m.fit}</b><div><strong>Fit</strong><small>Would a marketer pick them for ${esc(S.company.name)}?</small></div></div>
+        <div class="scorebox"><b class="${scoreClass(m.quality)}">${m.quality}</b><div><strong>Audience quality</strong><small>Is the audience real and paying attention?</small></div></div>
+      </div>
+      <p class="conf conf-${conf.level}"><span class="dotc"></span>Confidence: <b>${esc(conf.level)}</b>${conf.notes.length ? ` · ${esc(conf.notes.join(" · "))}` : ""}
+        ${m.checked === "rules" && S.meta.sources.ai ? ` <button class="btn link" data-act="ai-check">Check with ${esc(S.meta.ai.label)}</button>` : ""}</p>
+
+      <section><h4>Why this fit <span class="muted">· evidence from their posts and comments</span></h4>${dims}</section>
+
+      <section><h4>Audience quality</h4>
+        <div class="qparts">${qparts}</div>
+        ${signals ? `<ul class="claims signals">${signals}</ul>` : `<p class="muted small">No warning signs in the numbers we have.</p>`}
+        ${langs ? `<p class="small">Comment languages (${aud.sampled} sampled): ${langs}</p>` : ""}
+        ${consistency ? `<p class="small">${esc(consistency)}</p>` : ""}
+      </section>
+
+      <section><h4>Numbers</h4>
+        <div class="nums">
+          <div><b>${fmtNum(cr.median_views ?? cr.avg_views)}</b><span>median views${cr.views_window ? ` · ${esc(cr.views_window)}` : ""}</span></div>
+          <div><b>${pct(cr.engagement_rate)}</b><span>engagement${cr.engagement_vs_typical ? ` · ${cr.engagement_vs_typical}× typical` : ""}</span></div>
+          <div><b>${trendHtml(cr.views_trend)}</b><span>views trend</span></div>
+          <div><b>${cr.posts_per_month ?? "—"}</b><span>posts / month · last post ${daysAgo(cr.days_since_last_post)}</span></div>
+          <div><b>${euro(cr.price)}</b><span>est. price per post</span></div>
+          <div><b>${fmtNum(cr.avg_views)}</b><span>average views</span></div>
+        </div>
+        ${linked.length ? `<div class="also">${linked.map((o) => `<a href="${esc(o.url)}" target="_blank" rel="noopener">${ICONS[o.platform]} Also on ${esc(S.meta.platforms[o.platform])}: ${fmtNum(o.followers)}${o.avg_views != null ? ` · ${fmtNum(o.avg_views)} views` : ""}</a>`).join("")}</div>` : ""}
+      </section>
+
+      ${posts.length ? `<section><h4>Recent posts</h4><ul class="postlist">
+        ${posts.map((p, k) => `<li><a href="${esc(p.url || cr.url)}" target="_blank" rel="noopener"><span class="pref">p${k + 1}</span><span class="ptitle">${esc(p.title || "(no title)")}</span>
+          <span class="pviews">${p.views != null ? fmtNum(p.views) + " views" : fmtNum(p.likes) + " likes"}</span></a></li>`).join("")}</ul></section>` : ""}
+
+      <section><h4>Contact</h4>
+        <div class="contact">
+          ${cr.emails?.length ? cr.emails.map((e) => `<code>${esc(e)}</code><button class="btn small" data-act="copy" data-text="${esc(e)}">${ICONS.copy} Copy</button>`).join("")
+            : `<span class="muted small">No public email. Message them on ${esc(S.meta.platforms[c.platform])}${cr.links?.length ? " or via their link" : ""}.</span>`}
+          ${agency ? `<span class="tag" title="A company email that isn't the creator's own, or management mentioned in their bio">Likely via agency</span>` : ""}
+          ${Object.entries(cr.socials || {}).map(([k, l]) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS[k] || ICONS.ext} ${esc(k[0].toUpperCase() + k.slice(1))}</a>`).join("")}
+        </div>
+      </section>
+
+      <section><h4>Outreach</h4>
+        <div id="pitch-area">${m.pitch ? pitchHtml(m.pitch, cr) : `<button class="btn small" data-act="pitch">${ICONS.mail} Draft a message in ${esc(lang || "their language")}</button>`}</div>
+      </section>
+
+      ${cr.found_via?.length ? `<p class="via">Found via ${cr.found_via.map(esc).join(" · ")}</p>` : ""}
     </div>`;
 }
 
@@ -672,36 +919,47 @@ function pitchHtml(p, cr) {
     <div class="subject">${esc(p.subject)}</div>
     <textarea id="pitch-text" aria-label="Message">${esc(p.message)}</textarea>
     <div class="actions">
-      <button class="btn small primary" data-act="copy-pitch">${ICONS.copy} Copy message</button>
+      <button class="btn small primary" data-act="copy-pitch">${ICONS.copy} Copy</button>
       ${email ? `<a class="btn small" href="${esc(mailto)}">${ICONS.mail} Open in email</a>` : ""}
       ${!sameLang && p.english ? `<button class="btn small" data-act="toggle-english" data-shown="orig">Show English</button>` : ""}
-      <button class="btn small" data-act="pitch" data-id="${esc(cr.id)}">Rewrite</button>
+      <button class="btn small" data-act="pitch">Rewrite</button>
     </div>
   </div>`;
 }
 
-async function draftPitch(id, button) {
+async function draftPitch() {
+  const id = S.panelId;
   const area = $("#pitch-area");
-  if (button) button.disabled = true;
-  area.innerHTML = `<div class="loading-line"><span class="spinner"></span>${esc(S.meta.ai.label)} is writing a personal message…</div>`;
+  area.innerHTML = `<div class="loading-line"><span class="spinner"></span>${esc(S.meta.ai.writer.label)} is writing a personal message…</div>`;
   try {
     const p = await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(id)}/pitch`, { method: "POST" });
-    const d = await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(id)}`);
     S.pitch = p;
-    area.innerHTML = pitchHtml(p, d.creator);
+    if (S.panelId === id) $("#pitch-area").innerHTML = pitchHtml(p, S.panelData.creator);
   } catch (e) {
-    area.innerHTML = `<button class="btn primary" data-act="pitch" data-id="${esc(id)}">${ICONS.mail} Try again</button>`;
+    if (S.panelId === id) $("#pitch-area").innerHTML = `<button class="btn small" data-act="pitch">${ICONS.mail} Try again</button>`;
     toast(e.message, "err");
   }
 }
 
-async function setStatus(id, status) {
-  await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(id)}`, { method: "PATCH", body: { status } });
-  updateShortlistCount();
+async function rescoreOne(kind, btn) {
+  const id = S.panelId;
+  btn.disabled = true;
+  btn.innerHTML = kind === "deep"
+    ? `<span class="spinner"></span> Reading posts and comments…`
+    : `<span class="spinner"></span> ${esc(S.meta.ai.label)} is reading their posts…`;
+  try {
+    await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(id)}/${kind === "deep" ? "deep" : "ai-check"}`, { method: "POST" });
+    if (S.panelId === id) await openPanel(id);
+    loadCreators({ quiet: true });
+    if (kind === "deep") toast("Deep evaluation done", "ok");
+  } catch (err) {
+    toast(err.message, "err");
+    btn.disabled = false;
+    btn.textContent = "Try again";
+  }
 }
 
 // ---------- Find new creators ----------
-// Uses exactly what's picked in the search area; no extra dialog.
 function flagRow(id) {
   const row = $(id);
   row.classList.remove("attention");
@@ -712,7 +970,7 @@ function flagRow(id) {
 
 async function startFind() {
   const src = S.meta.sources;
-  if (!src.ai) { openSettings(); return toast("First choose an AI and add its key", "err"); }
+  if (!src.ai) { openSettings(); return toast("First choose an AI in Settings", "err"); }
   if (!S.f.markets.length) {
     flagRow("#crit-markets");
     return toast("Pick at least one market to search in", "err");
@@ -731,6 +989,7 @@ async function startFind() {
     S.job = await api(`/api/companies/${S.company.id}/jobs`, { method: "POST", body });
     S.viewJob = S.job.id;
     S.page = 1;
+    S.recent = null;
     loadCreators({ quiet: true });
     if (skipped.length) toast(`Skipping ${skipped.join(" and ")} (no API key yet)`);
     renderJob();
@@ -741,17 +1000,17 @@ async function startFind() {
   }
 }
 
-// ---------- Job progress ----------
 function jobProgress(job) {
   if (job.status === "done") return 100;
   const steps = job.steps || [];
-  const sources = steps.filter((s) => !["plan", "filter", "score"].includes(s.key));
+  const sources = steps.filter((s) => !["plan", "filter", "comments", "rules", "score", "link"].includes(s.key));
   const srcDone = sources.length ? sources.filter((s) => s.status !== "running").length / sources.length : 0;
   let p = 4;
   if (steps.find((s) => s.key === "plan")?.status === "done") p = 12;
   p += srcDone * 40;
-  if (steps.find((s) => s.key === "filter")?.status === "done") p = 58;
-  if (job.to_score) p = 58 + (job.scored / job.to_score) * 42;
+  if (steps.find((s) => s.key === "filter")?.status === "done") p = 56;
+  if (steps.find((s) => s.key === "comments")?.status === "done") p = 60;
+  if (job.to_score) p = 60 + (job.scored / job.to_score) * 40;
   return Math.min(99, Math.round(p));
 }
 
@@ -765,20 +1024,25 @@ function renderJob() {
   const where = job.markets.map((m) => S.meta.markets[m]?.name || m).join(", ");
   const on = job.platforms.map((p) => S.meta.platforms[p]).join(", ");
   const unscored = job.unscored?.length || 0;
-  const title = running ? "Scouting creators…"
+  const current = (job.steps || []).filter((s) => s.status === "running").map((s) => s.label).join(" · ");
+  const title = running ? (current || "Starting…")
     : job.status === "done" ? `Done: ${job.new ?? 0} new creators ranked${unscored ? ` (${unscored} with a quick score only)` : ""}`
     : job.status === "stopped" ? `Stopped: ${job.new ?? 0} creators ranked before you stopped` : "Search stopped";
+  const open = el.querySelector("details")?.open;
   el.innerHTML = `
     <div class="job-top">
-      ${running ? '<span class="spinner"></span>' : job.status === "done" ? "✅" : job.status === "stopped" ? "⏹️" : "⚠️"}
+      ${running ? '<span class="spinner"></span>' : `<span class="jdot ${job.status}"></span>`}
       <strong>${esc(title)}</strong>
       <span class="muted">${esc(where)} · ${esc(on)}${job.tags?.length ? ` · ${esc(job.tags.join(", "))}` : ""}${job.focus ? ` · “${esc(job.focus)}”` : ""}</span>
+      <span class="spacer"></span>
       ${!running && unscored && S.meta.sources.ai ? `<button class="btn small" data-act="retry-scoring" title="Let the search AI read their posts and re-score them">Check ${Math.min(unscored, S.meta.ai.local ? 10 : 40)} more with AI</button>` : ""}
-      ${running ? `<button class="btn small" data-act="stop-job">${ICONS.x} Stop</button>` : '<button class="btn small" data-act="dismiss-job">Dismiss</button>'}
+      ${running ? `<button class="btn small" data-act="stop-job">Stop</button>` : '<button class="btn small" data-act="dismiss-job">Dismiss</button>'}
     </div>
     <div class="bar"><i style="width:${jobProgress(job)}%"></i></div>
-    <ol class="steps">${(job.steps || []).map((s) => `<li class="${s.status}" title="${esc(s.detail)}"><span class="dot"></span>${esc(s.label)}${s.detail ? ` <em>· ${esc(s.detail)}</em>` : ""}</li>`).join("")}</ol>
-    ${job.error ? `<p style="color:#d33;margin:10px 0 0;font-size:14px">${esc(job.error)}</p>` : ""}`;
+    <details ${open ? "open" : ""}><summary>Details</summary>
+      <ol class="steps">${(job.steps || []).map((s) => `<li class="${s.status}"><span class="dot"></span>${esc(s.label)}${s.detail ? ` <em>· ${esc(s.detail)}</em>` : ""}</li>`).join("")}</ol>
+    </details>
+    ${job.error ? `<p class="err-line">${esc(job.error)}</p>` : ""}`;
 }
 
 function startPolling() {
@@ -820,28 +1084,46 @@ async function resumeJob() {
   }
 }
 
-// ---------- Company form ----------
-// Only who the company is. What kind of creators to look for is chosen in the search area.
+// ---------- Brand profile ----------
+// Who the company is and who it wants to reach. The AI judges fit against this.
 function openCompanyForm(company) {
   const isNew = !company;
-  const co = company || { name: "", description: "" };
+  const co = company || { name: "", description: "", profile: {} };
+  const p = { goal: "balanced", competitors: [], no_go: [], ...(co.profile || {}) };
   const dlg = $("#company");
   dlg.innerHTML = `
     <form method="dialog" id="company-form">
       <div class="dlg-head">
-        <div><h2 id="company-title">${isNew ? "Add a company" : `Edit ${esc(co.name)}`}</h2>
-        <p>Just tell Scout what the company does. You'll pick creator types and markets in the search.</p></div>
+        <div><h2 id="company-title">${isNew ? "Add a company" : `Brand profile: ${esc(co.name)}`}</h2>
+        <p>The AI judges every creator's fit against this. Only the name and description are required.</p></div>
         <button type="button" class="x" data-act="close" aria-label="Close">${ICONS.x}</button>
       </div>
-      <div class="dlg-body">
+      <div class="dlg-body form-grid">
         <label class="field"><span>Company name</span><input type="text" id="co-name" value="${esc(co.name)}" required></label>
-        <label class="field"><span>What does the company do?</span>
-          <textarea id="co-desc" rows="5" placeholder="e.g. Finnish marketplace for refurbished gaming PCs. Every PC is tested and comes with a warranty, and costs less than buying new. Sells across Europe.">${esc(co.description)}</textarea>
-          <small>What you sell, to whom, and what makes it different. The AI uses this to suggest creator types and to judge fit.</small></label>
-        ${isNew ? "" : `<div class="field"><span>Past collaborations <em class="opt">optional</em></span>
+        <div class="field"><span>Website <em class="opt">optional</em></span>
+          <div class="key-row"><input type="url" id="co-website" value="${esc(p.website || "")}" placeholder="https://…">
+          <button type="button" class="btn small" data-act="from-website" ${S.meta.sources.ai ? "" : "disabled title='Set up an AI first'"}>${ICONS.sparkle} Fill from website</button></div></div>
+        <label class="field span2"><span>What does the company do?</span>
+          <textarea id="co-desc" rows="3" placeholder="e.g. Finnish marketplace for refurbished gaming PCs. Every PC is tested and comes with a warranty, and costs less than buying new.">${esc(co.description)}</textarea></label>
+        <label class="field span2"><span>Target customer <em class="opt">who buys, and who watches</em></span>
+          <textarea id="co-target" rows="2" placeholder="e.g. Gamers 16–35 who want a capable PC for less; parents buying a first gaming PC">${esc(p.target_customer || "")}</textarea></label>
+        <div class="field"><span>Campaign goal</span>
+          <div class="seg" id="co-goal">${Object.entries(S.meta.goals).map(([k, label]) => `<button type="button" data-goal="${k}" class="${k === p.goal ? "on" : ""}">${esc(label)}</button>`).join("")}</div>
+          <small>Sales weighs audience fit most; Awareness weighs reach and audience quality more.</small></div>
+        <label class="field"><span>Youngest audience age <em class="opt">optional</em></span>
+          <input type="number" id="co-age" min="0" max="99" value="${p.min_audience_age ?? ""}" placeholder="e.g. 13">
+          <small>Creators whose viewers are clearly younger rank lower.</small></label>
+        <label class="field"><span>Price range <em class="opt">optional</em></span><input type="text" id="co-price" value="${esc(p.price_range || "")}" placeholder="e.g. €500–1,500"></label>
+        <label class="field"><span>Budget per collaboration, € <em class="opt">optional</em></span><input type="number" id="co-budget" min="0" step="50" value="${p.budget_max ?? ""}" placeholder="e.g. 800">
+          <small>Compared with each creator's estimated price.</small></label>
+        <div class="field span2"><span>Competitors <em class="opt">creators they sponsor are flagged</em></span><div class="chip-input" id="co-competitors"></div></div>
+        <label class="field span2"><span>Values and tone <em class="opt">optional</em></span><input type="text" id="co-values" value="${esc(p.values || "")}" placeholder="e.g. Trustworthy, value for money, less e-waste"></label>
+        <div class="field span2"><span>Never work with <em class="opt">optional</em></span><div class="chip-input" id="co-nogo"></div></div>
+        ${isNew ? "" : `<div class="field span2"><span>Past collaborations <em class="opt">optional</em></span>
           <div class="partners-box" id="partners-box">${partnersHtml(co.partners)}</div>
           <input type="file" id="partners-file" accept=".xlsx,.xlsm,.csv" hidden>
-          <small>Upload your collaboration tracker (Excel or CSV). Scout marks creators you've worked with 🤝, fills Agency and Year-week in downloads, and shows the AI what has worked for you.</small></div>`}
+          <small>Upload your collaboration tracker (Excel or CSV). Scout marks past partners, fills Agency and Year-week in downloads, and shows the AI what has worked for you.</small>
+          <div id="recall-box"></div></div>`}
       </div>
       <div class="dlg-foot">
         ${isNew ? "" : '<button type="button" class="btn link danger" data-act="delete-company">Delete company</button>'}
@@ -850,11 +1132,24 @@ function openCompanyForm(company) {
         <button type="submit" class="btn primary" id="co-save">${isNew ? "Create company" : "Save"}</button>
       </div>
     </form>`;
+  const competitors = chipInput($("#co-competitors"), p.competitors, "Company name, press Enter");
+  const nogo = chipInput($("#co-nogo"), p.no_go, "e.g. Gambling, adult content");
+  let goal = p.goal;
 
   dlg.onclick = async (e) => {
+    const g = e.target.closest("[data-goal]");
+    if (g) {
+      goal = g.dataset.goal;
+      $$("#co-goal button").forEach((b) => b.classList.toggle("on", b === g));
+      return;
+    }
     const act = e.target.closest("[data-act]")?.dataset.act;
     if (act === "partners-upload") return $("#partners-file").click();
     if (act === "partners-remove") return removePartners(co);
+    if (act === "from-website") return fillFromWebsite(e.target.closest("button"), competitors, nogo, (g2) => {
+      goal = g2;
+      $$("#co-goal button").forEach((b) => b.classList.toggle("on", b.dataset.goal === g2));
+    });
     if (act !== "delete-company") return;
     if (!confirm(`Delete ${co.name} and its creator rankings?`)) return;
     try {
@@ -867,7 +1162,16 @@ function openCompanyForm(company) {
 
   $("#company-form").onsubmit = async (e) => {
     e.preventDefault();
-    const body = { name: $("#co-name").value.trim(), description: $("#co-desc").value.trim() };
+    const num = (id) => (($(id).value || "").trim() ? Math.max(0, parseInt($(id).value, 10) || 0) || null : null);
+    const body = {
+      name: $("#co-name").value.trim(),
+      description: $("#co-desc").value.trim(),
+      profile: {
+        website: $("#co-website").value.trim(), target_customer: $("#co-target").value.trim(),
+        min_audience_age: num("#co-age"), price_range: $("#co-price").value.trim(), competitors: competitors.get(),
+        values: $("#co-values").value.trim(), no_go: nogo.get(), budget_max: num("#co-budget"), goal,
+      },
+    };
     if (!body.name) return toast("Give the company a name", "err");
     if (!body.description) return toast("Describe what the company does", "err");
     const btn = $("#co-save");
@@ -877,7 +1181,7 @@ function openCompanyForm(company) {
       const saved = isNew ? await api("/api/companies", { method: "POST", body }) : await api(`/api/companies/${co.id}`, { method: "PUT", body });
       S.companies = await api("/api/companies");
       dlg.close();
-      toast(isNew ? `${saved.name} added. Pick creator types and markets to search.` : "Saved", "ok");
+      toast(isNew ? `${saved.name} added. Describe who you want, or pick types and markets.` : "Saved. Rankings updated.", "ok");
       setCompany(saved);
     } catch (err) {
       toast(err.message, "err");
@@ -885,9 +1189,36 @@ function openCompanyForm(company) {
       btn.textContent = isNew ? "Create company" : "Save";
     }
   };
-  if (!isNew) $("#partners-file").onchange = (e) => uploadPartners(co, e.target);
+  if (!isNew) {
+    $("#partners-file").onchange = (e) => uploadPartners(co, e.target);
+    if (co.partners) loadRecall(co);
+  }
   dlg.showModal();
   $(isNew ? "#co-name" : "#co-desc").focus();
+}
+
+async function fillFromWebsite(btn, competitors, nogo, setGoal) {
+  const url = $("#co-website").value.trim();
+  if (!url) { $("#co-website").focus(); return toast("Enter the website address first", "err"); }
+  btn.disabled = true;
+  const label = btn.innerHTML;
+  btn.innerHTML = `<span class="spinner"></span> Reading…`;
+  try {
+    const r = await api("/api/profile-from-website", { method: "POST", body: { url, name: $("#co-name").value.trim() } });
+    let n = 0;
+    const fill = (id, v) => { if (v && !$(id).value.trim()) { $(id).value = v; n++; } };
+    fill("#co-desc", r.description);
+    fill("#co-target", r.target_customer);
+    fill("#co-price", r.price_range);
+    fill("#co-values", r.values);
+    if (r.min_audience_age && !$("#co-age").value) { $("#co-age").value = r.min_audience_age; n++; }
+    if (r.competitors?.length && !competitors.get().length) { competitors.set(r.competitors); n++; }
+    if (r.no_go?.length && !nogo.get().length) { nogo.set(r.no_go); n++; }
+    if (r.goal) setGoal(r.goal);
+    toast(n ? `Filled ${n} fields from the website. Check them before saving.` : "Nothing new found: your fields are already filled.", "ok");
+  } catch (err) { toast(err.message, "err"); }
+  btn.disabled = false;
+  btn.innerHTML = label;
 }
 
 function partnersHtml(p) {
@@ -895,6 +1226,21 @@ function partnersHtml(p) {
   return `<span><b>${p.count} creators</b>, ${p.collabs} collaborations · ${esc(p.file)}</span>
     <button type="button" class="btn small" data-act="partners-upload">Replace</button>
     <button type="button" class="btn small link danger" data-act="partners-remove">Remove</button>`;
+}
+
+// How well Scout's ranking agrees with the team's own history.
+async function loadRecall(co) {
+  const box = $("#recall-box");
+  if (!box) return;
+  try {
+    const r = await api(`/api/companies/${co.id}/recall`);
+    if (!r.partners) { box.innerHTML = ""; return; }
+    box.innerHTML = r.found
+      ? `<div class="recall"><b>Check against your history:</b> ${r.found} of your ${r.partners} past partners are in Scout's results;
+          <b>${r.in_top_quarter}</b> of them rank in the top quarter${r.median_rank_pct != null ? ` (median: top ${r.median_rank_pct}%)` : ""}.
+          <ul>${r.rows.slice(0, 5).map((x) => `<li>${esc(x.name)}: #${x.rank} of ${r.library} · fit ${x.fit ?? "—"}</li>`).join("")}</ul></div>`
+      : `<div class="recall">None of your ${r.partners} past partners are in Scout's results yet. Run searches in their markets to check whether Scout finds them.</div>`;
+  } catch { box.innerHTML = ""; }
 }
 
 async function uploadPartners(co, input) {
@@ -907,9 +1253,10 @@ async function uploadPartners(co, input) {
     const r = await api(`/api/companies/${co.id}/partners?filename=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
     co.partners = r.partners;
     box.innerHTML = partnersHtml(co.partners);
-    toast(`${r.partners.count} past partners imported${r.in_library ? `, ${r.in_library} already in your results (🤝)` : ""}`, "ok");
+    toast(`${r.partners.count} past partners imported${r.in_library ? `, ${r.in_library} already in your results` : ""}`, "ok");
     S.companies = await api("/api/companies");
     S.company = S.companies.find((x) => x.id === co.id) || S.company;
+    loadRecall(co);
     refresh();
   } catch (err) {
     box.innerHTML = partnersHtml(co.partners);
@@ -923,387 +1270,10 @@ async function removePartners(co) {
     await api(`/api/companies/${co.id}/partners`, { method: "DELETE" });
     co.partners = null;
     $("#partners-box").innerHTML = partnersHtml(null);
+    $("#recall-box").innerHTML = "";
     S.companies = await api("/api/companies");
     refresh();
   } catch (err) { toast(err.message, "err"); }
-}
-
-async function suggestTags(button) {
-  button.disabled = true;
-  button.innerHTML = `<span class="spinner"></span> Thinking…`;
-  try {
-    const r = await api(`/api/companies/${S.company.id}/suggest-tags`, { method: "POST" });
-    S.company.suggested_tags = r.suggested_tags;
-    renderTagPicker();
-    toast(r.added.length ? `${r.added.length} new ideas added` : "No new ideas this time");
-  } catch (err) {
-    toast(err.message, "err");
-    renderTagPicker();
-  }
-}
-
-// ---------- Settings (AI choice + API keys) ----------
-const DATA_KEY_LINKS = {
-  youtube: "https://console.cloud.google.com/apis/library/youtube.googleapis.com",
-};
-
-async function openSettings() {
-  let st;
-  try { st = await api("/api/settings"); } catch (e) { return toast(e.message, "err"); }
-  const dlg = $("#settings");
-  let provider = st.ai_provider;
-  let writer = st.writer_provider || "";
-  const drafts = {}; // unsaved edits per provider, so switching back and forth keeps what was typed
-  let local = null;  // /api/local-ai: this computer, the recommended model, Ollama status, download
-  let localTimer = null;
-
-  dlg.innerHTML = `
-    <form id="settings-form" autocomplete="off">
-      <div class="dlg-head">
-        <div><h2 id="settings-title">Settings</h2><p>Keys are saved only on this computer and are never shown again in full.</p></div>
-        <button type="button" class="x" data-act="close" aria-label="Close">${ICONS.x}</button>
-      </div>
-      <div class="dlg-body">
-        <section class="set-section">
-          <h3>Search AI</h3>
-          <p class="muted small">Plans searches and checks creators, many times per search. <b>Local AI</b> runs on this computer for free.</p>
-          <div class="provider-grid" id="ai-providers"></div>
-          <div id="ai-fields" class="ai-fields"></div>
-        </section>
-        <section class="set-section">
-          <h3>Writing AI</h3>
-          <p class="muted small">Only used when you click <i>Draft a message</i>, or turn on the AI web scout. A paid AI writes better Finnish or German, and costs cents per message.</p>
-          <select id="writer-provider" class="model-select" aria-label="Writing AI"></select>
-        </section>
-        <section class="set-section">
-          <h3>Data sources</h3>
-          ${dataKeyField("youtube", "YouTube API key", st.youtube_key_hint, "Free: Google Cloud console → enable YouTube Data API v3 → Credentials → Create API key.")}
-          <p class="note">TikTok needs no key: Scout reads TikTok's public pages itself.</p>
-        </section>
-      </div>
-      <div class="dlg-foot">
-        <span class="spacer"></span>
-        <button type="button" class="btn" data-act="close">Cancel</button>
-        <button type="submit" class="btn primary">Save</button>
-      </div>
-    </form>`;
-
-  const renderProviders = () => {
-    $("#ai-providers").innerHTML = Object.entries(st.providers).map(([k, p]) => `
-      <button type="button" class="provider-card ${k === provider ? "on" : ""}" data-provider="${k}" aria-pressed="${k === provider}" aria-label="${esc(p.label)} (${esc(p.company)})${p.ready ? ", set up" : ""}">
-        <b>${esc(p.label)}${p.ready ? '<span class="ready" title="Set up">✓</span>' : ""}</b>
-        <small>${esc(p.company)}</small>
-      </button>`).join("");
-  };
-
-  const loaded = {};    // provider -> { models, recommended, manual } once "Load models" ran
-  const autoTried = {}; // so a failing auto-load isn't retried on every re-render
-
-  const readFields = () => {
-    if (!$("#ai-model")) return;
-    const model = $("#ai-model").value.trim();
-    drafts[provider] = {
-      api_key: $("#ai-key")?.value.trim() || "",
-      model: model === "__custom__" ? "" : model,
-      base_url: $("#ai-url")?.value.trim() ?? drafts[provider]?.base_url ?? null,
-      workspace_id: $("#ai-workspace")?.value.trim() ?? null,
-      clear_key: drafts[provider]?.clear_key || false,
-    };
-  };
-
-  // A real dropdown of every model the key can use (the old type-ahead box hid most of them).
-  const modelFieldHtml = (p, model) => {
-    const l = loaded[provider];
-    if (l && !l.manual) {
-      return `<select id="ai-model" class="model-select" aria-label="Model">
-        ${l.models.map((m) => `<option value="${esc(m)}" ${m === model ? "selected" : ""}>${esc(m)}${m === l.recommended ? "   ★ recommended" : ""}</option>`).join("")}
-        <option value="__custom__">Type a different name…</option></select>`;
-    }
-    return `<input type="text" id="ai-model" value="${esc(model)}" aria-label="Model"
-      placeholder="${esc(p.default_model || "Press Load models, then pick one")}">`;
-  };
-
-  const renderWriter = () => {
-    const opts = Object.entries(st.providers).filter(([k, p]) => !p.local && (p.key_hint || k === writer));
-    $("#writer-provider").innerHTML = `<option value="">Same as the search AI (${esc(st.providers[provider].label)})</option>`
-      + opts.map(([k, p]) => `<option value="${k}" ${k === writer ? "selected" : ""}>${esc(p.label)}${p.model ? ` (${esc(p.model)})` : ""}</option>`).join("")
-      + (opts.length ? "" : `<option disabled>Add a Claude, OpenAI or Gemini key above to use it here</option>`);
-  };
-
-  const gb = (bytes) => (bytes / 1024 ** 3).toFixed(1);
-  const localHtml = () => {
-    if (!local) return `<div class="loading-line"><span class="spinner"></span>Looking at this computer…</div>`;
-    const { hardware: hw, recommended: rec, ollama, pull } = local;
-    const gpu = hw.dedicated_gpu ? `${esc(hw.dedicated_gpu.name)}${hw.dedicated_gpu.vram_gb ? ` (${hw.dedicated_gpu.vram_gb} GB)` : ""}`
-      : `${hw.gpus[0] ? esc(hw.gpus[0].name) + ", " : ""}no dedicated graphics card`;
-    const have = ollama.models.map((m) => m.name);
-    const d = drafts[provider] || {};
-    const current = d.model ?? st.providers.ollama.model;
-    const pulling = pull && !pull.done;
-    let status = "";
-    if (!ollama.installed) {
-      status = `<p class="note">Local AI needs <b>Ollama</b> (free). Install it, then reopen Settings.
-        <a class="btn small" href="https://ollama.com/download" target="_blank" rel="noopener">${ICONS.ext} Get Ollama</a></p>`;
-    } else if (!ollama.running) {
-      status = `<p class="note">Ollama is installed but not running. <button type="button" class="btn small" data-act="start-ollama">Start it</button></p>`;
-    }
-    const recBox = `<div class="rec">
-        <div><b>Recommended for this computer: ${esc(rec.model)}</b> <span class="muted">· ${rec.size_gb} GB</span>
-          <small>${esc(rec.note)}. Why: ${esc(rec.why)}.</small></div>
-        ${have.includes(rec.model) ? `<span class="pill partner">✓ Downloaded</span>`
-          : pulling ? "" : `<button type="button" class="btn small primary" data-act="pull" data-model="${esc(rec.model)}" ${ollama.running && rec.fits_disk ? "" : "disabled"}>Download</button>`}
-      </div>
-      ${rec.fits_disk ? "" : `<p class="note bad">Not enough free disk space (${hw.free_disk_gb} GB free).</p>`}`;
-    const progress = pull ? (pull.error ? `<p class="test-msg bad">✗ ${esc(pull.error)}</p>`
-      : pull.done ? "" : `<div class="pull"><div class="bar"><i style="width:${pull.total ? Math.round(pull.completed / pull.total * 100) : 2}%"></i></div>
-        <small>Downloading ${esc(pull.model)}: ${pull.total ? `${gb(pull.completed)} of ${gb(pull.total)} GB` : esc(pull.status || "starting")}. You can keep using Scout.</small></div>`) : "";
-    const others = local.catalog.filter((m) => m.model !== rec.model).map((m) => `
-      <li><span><b>${esc(m.model)}</b> · ${m.size_gb} GB · ${esc(m.note)}</span>
-        ${have.includes(m.model) ? '<span class="muted">downloaded</span>' : `<button type="button" class="btn small" data-act="pull" data-model="${esc(m.model)}" ${ollama.running && !pulling ? "" : "disabled"}>Download</button>`}</li>`).join("");
-    return `
-      <p class="hw">This computer: <b>${hw.ram_gb ?? "?"} GB</b> memory · ${gpu} · ${hw.cpu_threads} processor threads</p>
-      ${status}${recBox}${progress}
-      ${have.length ? `<div class="field"><span>Model to use</span>
-        <select id="ai-model" class="model-select">${have.map((m) => `<option value="${esc(m)}" ${m === current ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></div>` : ""}
-      <details class="other-models"><summary>Other sizes</summary><ul>${others}</ul></details>`;
-  };
-
-  const refreshLocal = async () => {
-    clearTimeout(localTimer);
-    if (provider === "ollama") readFields(); // keep a model the user just picked
-    try { local = await api("/api/local-ai"); } catch (err) { toast(err.message, "err"); return; }
-    const have = local.ollama.models.map((m) => m.name);
-    const d = drafts.ollama || {};
-    const current = d.model || st.providers.ollama.model;
-    // A fresh download (or a saved model that isn't there any more) -> the recommended one if we have it.
-    if (!have.includes(current) && have.length) {
-      drafts.ollama = { ...d, model: have.includes(local.recommended.model) ? local.recommended.model : have[0] };
-    }
-    if (provider === "ollama" && $("#local-ai")) $("#local-ai").innerHTML = localHtml();
-    if (local.pull && !local.pull.done && dlg.open) localTimer = setTimeout(refreshLocal, 1500);
-    else if (local.pull?.done && !local.pull.error && local.pull.model && !local._announced) {
-      local._announced = true;
-      toast(`${local.pull.model} is ready`, "ok");
-    }
-  };
-
-  const renderFields = () => {
-    const p = st.providers[provider];
-    renderWriter();
-    if (p.local) {
-      $("#ai-fields").innerHTML = `<div id="local-ai" class="local-ai">${localHtml()}</div>
-        <div class="test-row">
-          <button type="button" class="btn small" data-act="test-ai">Test ${esc(p.label)}</button>
-          <span class="test-msg" id="ai-test-msg"></span>
-        </div>`;
-      if (!local) refreshLocal();
-      return;
-    }
-    const d = drafts[provider] || {};
-    let model = d.model ?? p.model;
-    const l = loaded[provider];
-    if (l && !l.manual && !l.models.includes(model)) model = l.recommended;
-    const keyField = p.needs_key || provider === "custom" ? `
-      <div class="field"><span>API key${p.needs_key ? "" : ' <span class="muted">(if the server needs one)</span>'}</span>
-        <div class="key-row">
-          <input type="password" id="ai-key" value="${esc(d.api_key || "")}" autocomplete="new-password"
-            placeholder="${p.key_hint && !d.clear_key ? `Saved (${esc(p.key_hint)}). Paste a new key to replace it` : "Paste your key"}">
-          ${p.key_url ? `<a class="btn small" href="${esc(p.key_url)}" target="_blank" rel="noopener">${ICONS.ext} Get a key</a>` : ""}
-        </div>
-        ${p.key_hint && !d.clear_key ? '<button type="button" class="btn link small-link" data-act="clear-ai-key">Remove saved key</button>' : ""}
-      </div>` : `<p class="note">No key needed. ${provider === "ollama" ? `Install Ollama, run a model once (for example <code>ollama run ${esc(p.default_model)}</code>), and keep it running. Local models are free but slower and less precise.` : ""}</p>`;
-    $("#ai-fields").innerHTML = `
-      ${keyField}
-      ${p.workspace ? `<div class="field" id="workspace-field"><span>Workspace ID <span class="muted">(only if your key asks for one)</span></span>
-        <input type="text" id="ai-workspace" value="${esc(d.workspace_id ?? p.workspace_id ?? "")}" placeholder="wrkspc_…" autocomplete="off" spellcheck="false">
-        <small>Organization-wide Claude keys need it. Find it in the Claude Console under Settings → Workspaces, or create the API key inside a workspace instead.</small>
-      </div>` : ""}
-      ${p.editable_url ? `<div class="field"><span>Address</span>
-        <input type="url" id="ai-url" value="${esc(d.base_url ?? p.base_url)}" placeholder="https://your-server/v1"></div>` : ""}
-      <div class="field"><span>Model</span>
-        <div class="key-row">
-          ${modelFieldHtml(p, model)}
-          <button type="button" class="btn small" data-act="load-models">${l ? "Reload" : "Load models"}</button>
-        </div>
-      </div>
-      <div class="test-row">
-        <button type="button" class="btn small" data-act="test-ai">Test ${esc(p.label)}</button>
-        <span class="test-msg" id="ai-test-msg"></span>
-      </div>
-      ${p.web_search ? `<p class="note">Claude costs money per search. Cheaper: use the Local AI for searches and Claude only as the writing AI below.</p>` : ""}`;
-    // A key is already saved: fetch the model list right away so a retired default gets replaced.
-    if (!l && !autoTried[provider] && p.needs_key && (p.key_hint || d.api_key) && !d.clear_key) {
-      autoTried[provider] = true;
-      loadModels();
-    }
-  };
-
-  const loadModels = async ({ thenTest = false } = {}) => {
-    const forProvider = provider;
-    const msg = $("#ai-test-msg");
-    msg.className = "test-msg";
-    msg.textContent = "Loading the models this key can use…";
-    const body = aiBody();
-    let r;
-    try {
-      r = await api("/api/settings/models", { method: "POST", body });
-    } catch (err) {
-      return showResult(msg, { ok: false, message: err.message });
-    }
-    if (provider !== forProvider) return; // user switched provider meanwhile
-    if (!r.ok) return showResult($("#ai-test-msg"), r);
-    if (!r.models.length) return showResult($("#ai-test-msg"), { ok: false, message: "No usable models found for this key" });
-    loaded[forProvider] = { models: r.models, recommended: r.recommended };
-    const wanted = body.model || r.current;
-    drafts[forProvider] = { ...drafts[forProvider], model: r.recommended };
-    renderFields();
-    const note = wanted && wanted !== r.recommended
-      ? `“${wanted}” isn't available for this key, so ${r.recommended} was picked instead.`
-      : `Using ${r.recommended}.`;
-    showResult($("#ai-test-msg"), { ok: true, message: `${r.models.length} models available. ${note}` });
-    if (thenTest) await runTest();
-  };
-
-  const runTest = async () => {
-    const msg = $("#ai-test-msg");
-    const btn = $('[data-act="test-ai"]');
-    btn.disabled = true;
-    msg.className = "test-msg";
-    msg.textContent = "Testing…";
-    try { showResult(msg, await api("/api/settings/test", { method: "POST", body: aiBody() })); }
-    catch (err) { showResult(msg, { ok: false, message: err.message }); }
-    finally { btn.disabled = false; }
-  };
-
-  // Pasting a key loads the models and tests it straight away.
-  let keyLoadedFor = "";
-  const keyEntered = (e) => {
-    if (e.target.id !== "ai-key") return;
-    setTimeout(() => {
-      const key = e.target.value.trim();
-      if (!key || key === keyLoadedFor) return; // paste and the following change event: load once
-      keyLoadedFor = key;
-      delete loaded[provider];
-      loadModels({ thenTest: true });
-    }, 0);
-  };
-  dlg.onpaste = keyEntered;
-  dlg.onchange = (e) => {
-    if (e.target.id === "ai-key") return keyEntered(e);
-    if (e.target.id === "ai-workspace") {  // new workspace: reload models and test straight away
-      delete loaded[provider];
-      return loadModels({ thenTest: true });
-    }
-    if (e.target.id === "writer-provider") { writer = e.target.value; return; }
-    if (e.target.id === "ai-model" && e.target.value === "__custom__") {
-      readFields();
-      loaded[provider].manual = true;
-      renderFields();
-      $("#ai-model").focus();
-    }
-  };
-
-  const aiBody = () => {
-    readFields();
-    const d = drafts[provider] || {};
-    return { target: "ai", provider, api_key: d.api_key || null, model: d.model || null, base_url: d.base_url || null,
-             workspace_id: d.workspace_id || null };
-  };
-
-  const showResult = (el, r) => {
-    el.className = `test-msg ${r.ok ? "ok" : "bad"}`;
-    el.textContent = (r.ok ? "✓ " : "✗ ") + r.message;
-    // Key needs a workspace: point straight at the field that fixes it.
-    const ws = $("#workspace-field");
-    if (ws) ws.classList.toggle("needs-input", !r.ok && /workspace/i.test(r.message));
-    if (ws && !r.ok && /workspace/i.test(r.message)) $("#ai-workspace").focus();
-  };
-
-  dlg.onclick = async (e) => {
-    const card = e.target.closest("[data-provider]");
-    if (card) {
-      readFields();
-      provider = card.dataset.provider;
-      renderProviders();
-      renderFields();
-      return;
-    }
-    const act = e.target.closest("[data-act]")?.dataset.act;
-    const btn = e.target.closest("button");
-    if (act === "pull") {
-      btn.disabled = true;
-      try {
-        await api("/api/local-ai/pull", { method: "POST", body: { model: btn.dataset.model } });
-        await refreshLocal();
-      } catch (err) { toast(err.message, "err"); btn.disabled = false; }
-    } else if (act === "start-ollama") {
-      btn.disabled = true;
-      btn.innerHTML = '<span class="spinner"></span> Starting…';
-      try { await api("/api/local-ai/start", { method: "POST" }); await refreshLocal(); }
-      catch (err) { toast(err.message, "err"); btn.disabled = false; btn.textContent = "Start it"; }
-    } else if (act === "clear-ai-key") {
-      readFields();
-      drafts[provider] = { ...drafts[provider], clear_key: true, api_key: "" };
-      renderFields();
-    } else if (act === "load-models") {
-      btn.disabled = true;
-      delete loaded[provider];
-      await loadModels();
-      const b = $('[data-act="load-models"]');
-      if (b) b.disabled = false;
-    } else if (act === "test-ai") {
-      await runTest();
-    } else if (act === "test-youtube") {
-      const which = act.slice(5);
-      btn.disabled = true;
-      const msg = $(`#${which}-msg`);
-      msg.className = "test-msg"; msg.textContent = "Testing…";
-      const body = { target: which, youtube_api_key: $("#youtube-key").value.trim() || null };
-      try { showResult(msg, await api("/api/settings/test", { method: "POST", body })); }
-      catch (err) { showResult(msg, { ok: false, message: err.message }); }
-      finally { btn.disabled = false; }
-    }
-  };
-
-  $("#settings-form").onsubmit = async (e) => {
-    e.preventDefault();
-    readFields();
-    const body = {
-      ai_provider: provider,
-      writer_provider: writer,
-      providers: Object.fromEntries(Object.entries(drafts).map(([k, d]) => [k, {
-        api_key: d.api_key || null, model: d.model ?? null, base_url: d.base_url ?? null, clear_key: !!d.clear_key,
-        workspace_id: d.workspace_id ?? null,
-      }])),
-      youtube_api_key: $("#youtube-key").value.trim() || null,
-    };
-    try {
-      await api("/api/settings", { method: "PUT", body });
-      S.meta = await api("/api/meta");
-      renderFilters();
-      dlg.close();
-      toast(S.meta.ai.ready ? `Saved. Searches use ${S.meta.ai.label} (${S.meta.ai.model}); messages use ${S.meta.ai.writer.label}.` : "Saved", "ok");
-    } catch (err) { toast(err.message, "err"); }
-  };
-
-  dlg.addEventListener("close", () => clearTimeout(localTimer), { once: true });
-  renderProviders();
-  renderFields();
-  dlg.showModal();
-}
-
-function dataKeyField(which, label, hint, help) {
-  return `
-    <div class="field"><span>${esc(label)}</span>
-      <div class="key-row">
-        <input type="password" id="${which}-key" autocomplete="new-password"
-          placeholder="${hint ? `Saved (${esc(hint)}). Paste a new one to replace it` : "Paste it here"}">
-        <a class="btn small" href="${DATA_KEY_LINKS[which]}" target="_blank" rel="noopener">${ICONS.ext} Get one</a>
-        <button type="button" class="btn small" data-act="test-${which}">Test</button>
-      </div>
-      <span class="test-msg" id="${which}-msg"></span>
-      <small>${esc(help)}</small>
-    </div>`;
 }
 
 // ---------- Shortlist ----------
@@ -1315,26 +1285,29 @@ async function updateShortlistCount() {
 
 async function renderShortlist() {
   const data = await api(`/api/companies/${S.company.id}/creators?status=shortlist&page_size=500&sort=match`);
+  S.rows = data.items;
   $("#shortlist-count").textContent = data.total;
   $("#export-csv").hidden = !data.total;
   const el = $("#shortlist");
   if (!data.total) {
-    el.innerHTML = `<div class="empty"><h2>Your shortlist is empty</h2><p>Open any creator and press <b>Add to shortlist</b>. They'll show up here, ready for outreach.</p>
+    el.innerHTML = `<div class="empty"><h2>Your shortlist is empty</h2><p>Press the star on any creator (or <kbd>s</kbd>). They'll show up here, ready for outreach.</p>
       <button class="btn primary" data-view="discover">Browse creators</button></div>`;
     return;
   }
   const statuses = [["shortlisted", "Shortlisted"], ["contacted", "Contacted"], ["replied", "Replied"], ["declined", "Declined"]];
-  el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Creator</th><th>Match</th><th>Followers</th><th>Engagement</th><th>Market</th><th>Email</th><th>Status</th></tr></thead>
+  el.innerHTML = `<div class="table-wrap"><table class="list">
+    <thead><tr><th>Creator</th><th class="num">Fit</th><th class="num">Quality</th><th class="num">Followers</th><th class="num">Views</th><th class="num">Est. price</th><th>Market</th><th>Email</th><th>Status</th></tr></thead>
     <tbody>${data.items.map((c) => `
-      <tr>
-        <td><div class="who" data-open="${esc(c.id)}">
-          ${c.avatar ? `<img src="${esc(c.avatar)}" alt="">` : `<span class="av"></span>`}
-          <div><b>${esc(c.name)}</b><small>${ICONS[c.platform]} ${esc(S.meta.platforms[c.platform])}</small></div></div></td>
-        <td><span class="mini-score ${scoreClass(c.score)}">${c.score}</span></td>
-        <td>${fmtNum(c.followers)}</td>
-        <td>${pct(c.engagement_rate)}${c.engagement_vs_typical ? ` <span class="muted">(${c.engagement_vs_typical}×)</span>` : ""}</td>
-        <td>${esc(c.country || "—")}</td>
+      <tr data-id="${esc(c.id)}">
+        <td class="c-who"><div class="who">${avatar(c.avatar, c.name)}
+          <div class="who-text"><div class="who-name"><span class="plat plat-${c.platform}">${ICONS[c.platform]}</span><b>${esc(c.name)}</b>${badges(c)}</div>
+          <div class="who-sum">${esc(c.summary)}</div></div></div></td>
+        <td class="num">${scoreHtml(c.fit, c, "fit")}</td>
+        <td class="num">${scoreHtml(c.quality, c, "quality")}</td>
+        <td class="num">${fmtNum(c.followers)}</td>
+        <td class="num">${fmtNum(c.median_views ?? c.avg_views)}</td>
+        <td class="num">${euro(c.price)}</td>
+        <td class="c-mkt">${esc(c.country || "—")}</td>
         <td>${c.email ? `<button class="btn small" data-act="copy" data-text="${esc(c.email)}">${ICONS.copy} ${esc(c.email)}</button>` : '<span class="muted">—</span>'}</td>
         <td><select data-status-for="${esc(c.id)}">${statuses.map(([v, l]) => `<option value="${v}" ${c.status === v ? "selected" : ""}>${l}</option>`).join("")}
           <option value="">Remove</option></select></td>
@@ -1344,9 +1317,11 @@ async function renderShortlist() {
 // ---------- Views ----------
 function showView(view) {
   S.view = view;
+  closePanel();
   $$(".tab").forEach((t) => t.classList.toggle("on", t.dataset.view === view));
   $("#view-discover").hidden = view !== "discover";
   $("#view-shortlist").hidden = view !== "shortlist";
+  renderBulk();
   if (view === "shortlist") renderShortlist();
   else loadCreators();
 }
@@ -1357,40 +1332,69 @@ function refresh() {
   updateShortlistCount();
 }
 
+function setMode(mode) {
+  S.mode = mode;
+  try { localStorage.setItem("scout.mode", mode); } catch { /* storage blocked */ }
+  $$("#view-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+  loadCreators();
+}
+
 // ---------- Events ----------
+const typing = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName) || document.activeElement.isContentEditable;
+
 function bindEvents() {
-  $("#q").addEventListener("input", (e) => { S.f.q = e.target.value.trim(); filtersChanged({ debounce: true }); });
+  const q = $("#q");
+  q.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); runQuery(q.value); }
+    else if (e.key === "Escape") { hideRecent(); q.blur(); }
+  });
+  q.addEventListener("focus", showRecent);
+  q.addEventListener("input", () => {
+    if (!q.value.trim()) {
+      showRecent();
+      if (S.f.q) { S.f.q = ""; $("#understood").hidden = true; filtersChanged({ debounce: true }); }
+    } else hideRecent();
+  });
+  q.addEventListener("blur", () => setTimeout(hideRecent, 150));
+
   $("#f-sort").addEventListener("change", (e) => { S.f.sort = e.target.value; filtersChanged(); });
   $("#f-language").addEventListener("change", (e) => { S.f.language = e.target.value; filtersChanged(); });
   $("#f-min-score").addEventListener("input", (e) => { S.f.min_score = +e.target.value; $("#min-score-val").textContent = e.target.value; filtersChanged({ debounce: true }); });
   $("#f-min-eng").addEventListener("change", (e) => { S.f.min_eng = +e.target.value; filtersChanged(); });
   $("#f-has-email").addEventListener("change", (e) => { S.f.has_email = e.target.checked; filtersChanged(); });
+  $("#f-growing").addEventListener("change", (e) => { S.f.growing = e.target.checked; filtersChanged(); });
   $("#f-gems").addEventListener("change", (e) => { S.f.gems = e.target.checked; filtersChanged(); });
   $("#f-hidden").addEventListener("change", (e) => { S.f.show_hidden = e.target.checked; filtersChanged(); });
   $("#c-scout").addEventListener("change", (e) => { S.f.ai_scout = e.target.checked; searchChanged({ reload: false }); });
   $("#size-lo").addEventListener("input", () => sizeFromSlider("lo"));
   $("#size-hi").addEventListener("input", () => sizeFromSlider("hi"));
-  $("#toggle-advanced").addEventListener("click", () => {
-    const adv = $("#advanced");
-    adv.hidden = !adv.hidden;
-    $("#toggle-advanced").setAttribute("aria-expanded", String(!adv.hidden));
-  });
   $("#company-btn").addEventListener("click", (e) => { e.stopPropagation(); toggleCompanyMenu(); });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName) && !$("dialog[open]")) {
+    if (e.key === "Enter" && e.target.id === "tag-input" && e.target.value.trim()) {
       e.preventDefault();
-      $("#q").focus();
+      addTag(e.target.value.trim());
+      $("#tag-add-btn").click();
+      return;
     }
-    if ((e.key === "Enter" || e.key === " ") && document.activeElement.classList.contains("card")) {
-      e.preventDefault();
-      openDetail(document.activeElement.dataset.id);
+    if ($("dialog[open]")) return;
+    if (e.key === "Escape") {
+      if ($$(".pop:not([hidden]), .menu-pop").length) closePops();
+      else if (S.panelId) closePanel();
+      return;
+    }
+    if (typing() || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "/") { e.preventDefault(); $("#q").focus(); return; }
+    const c = S.rows[S.cursor];
+    if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); moveCursor(1); }
+    else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); moveCursor(-1); }
+    else if ((e.key === "Enter" || e.key === "o") && c) { e.preventDefault(); openPanel(c.id); }
+    else if (e.key === "s" && c) toggleStar(c.id);
+    else if (e.key === "x" && c && S.view === "discover") toggleSelect(c.id);
+    else if (e.key === "h" && c && S.view === "discover") {
+      openPanel(c.id).then(() => { const b = $('[data-act="panel-hide"]'); if (b) reasonMenu(b, (r) => hideCreator(c.id, r)); });
     }
   });
-
-  // Close dialogs on backdrop click
-  $$("dialog").forEach((d) => d.addEventListener("click", (e) => { if (e.target === d) d.close(); }));
-  $("#detail").addEventListener("close", () => { if (S.view === "discover") loadCreators({ quiet: true }); else renderShortlist(); });
 
   // Images that fail to load become initials
   document.addEventListener("error", (e) => {
@@ -1401,6 +1405,14 @@ function bindEvents() {
   }, true);
 
   document.addEventListener("change", async (e) => {
+    if (e.target.id === "sel-all") {
+      S.rows.forEach((c) => (e.target.checked ? S.selected.add(c.id) : S.selected.delete(c.id)));
+      loadCreators({ quiet: true });
+      renderBulk();
+      return;
+    }
+    const box = e.target.closest("[data-select]");
+    if (box) { toggleSelect(box.dataset.select, box.checked); return; }
     const sel = e.target.closest("select[data-status-for]");
     if (!sel) return;
     try {
@@ -1412,6 +1424,7 @@ function bindEvents() {
 
   document.addEventListener("click", async (e) => {
     if (!e.target.closest(".company-menu")) toggleCompanyMenu(false);
+    if (!e.target.closest(".pop, .pop-anchor, .menu-pop, [data-act='panel-hide'], [data-act='bulk-hide-menu']")) closePops();
 
     const companyBtn = e.target.closest("[data-company]");
     if (companyBtn) {
@@ -1420,8 +1433,20 @@ function bindEvents() {
       if (co && co.id !== S.company.id) setCompany(co);
       return;
     }
+    const popBtn = e.target.closest("#size-btn, #more-btn, #tag-add-btn");
+    if (popBtn) {
+      togglePop(popBtn);
+      if (popBtn.id === "tag-add-btn" && !$("#tag-pop").hidden) { $("#tag-pop").innerHTML = tagPopHtml(); $("#tag-input").focus(); }
+      return;
+    }
+    const recent = e.target.closest("[data-recent]");
+    if (recent) { applyRecent(S.recent[+recent.dataset.recent]); return; }
     const viewBtn = e.target.closest("[data-view]");
     if (viewBtn) { showView(viewBtn.dataset.view); return; }
+    const modeBtn = e.target.closest("[data-mode]");
+    if (modeBtn) { setMode(modeBtn.dataset.mode); return; }
+    const plat = e.target.closest("[data-platform]");
+    if (plat) { S.f.platforms = plat.dataset.platform ? [plat.dataset.platform] : []; renderPlatforms(); searchChanged(); return; }
     const pageBtn = e.target.closest("[data-page]");
     if (pageBtn && !pageBtn.disabled) {
       S.page = +pageBtn.dataset.page;
@@ -1431,8 +1456,6 @@ function bindEvents() {
     }
     const sizePreset = e.target.closest("[data-size]");
     if (sizePreset) { const p = SIZE_PRESETS[+sizePreset.dataset.size]; setSize(p.min, p.max); return; }
-    const sugg = e.target.closest("[data-sugg]");
-    if (sugg) { applySuggestion(S.company.suggested_searches[+sugg.dataset.sugg]); return; }
     const tagAdd = e.target.closest("[data-tag-add]");
     if (tagAdd) { addTag(tagAdd.dataset.tagAdd); return; }
     const tagRemove = e.target.closest("[data-tag-remove]");
@@ -1449,10 +1472,15 @@ function bindEvents() {
       searchChanged();
       return;
     }
-    const card = e.target.closest(".card");
-    if (card) { openDetail(card.dataset.id); return; }
-    const who = e.target.closest("[data-open]");
-    if (who) { openDetail(who.dataset.open); return; }
+    const star = e.target.closest("[data-star]");
+    if (star) { toggleStar(star.dataset.star); return; }
+    const row = e.target.closest("#grid [data-id], #shortlist [data-id]");
+    if (row && !e.target.closest("[data-select], .c-sel, a, select, button")) {
+      S.cursor = S.rows.findIndex((c) => c.id === row.dataset.id);
+      markCursor();
+      openPanel(row.dataset.id);
+      return;
+    }
 
     const actEl = e.target.closest("[data-act]");
     if (!actEl) return;
@@ -1462,11 +1490,21 @@ function bindEvents() {
     else if (act === "settings") { toggleCompanyMenu(false); openSettings(); }
     else if (act === "find") startFind();
     else if (act === "suggest-tags") suggestTags(actEl);
+    else if (act === "undo-query" && S.undo) {
+      S.f = S.undo;
+      S.undo = null;
+      $("#q").value = "";
+      $("#understood").hidden = true;
+      renderFilters();
+      searchChanged();
+    }
     else if (act === "reset-filters") {
-      // Clear what narrows the grid; keep the settings that only affect new searches.
-      const keep = { deal_types: S.f.deal_types, avoid: S.f.avoid, example_creators: S.f.example_creators, ai_scout: S.f.ai_scout };
+      // Clear what narrows the list; keep the settings that only affect new searches.
+      const keep = { deal_types: S.f.deal_types, avoid: S.f.avoid, example_creators: S.f.example_creators, ai_scout: S.f.ai_scout, sort: S.f.sort };
       S.f = { ...DEFAULT_FILTERS, ...keep };
       $("#q").value = "";
+      $("#understood").hidden = true;
+      closePops();
       renderFilters();
       searchChanged();
     }
@@ -1480,11 +1518,6 @@ function bindEvents() {
       catch (err) { toast(err.message, "err"); actEl.disabled = false; }
     }
     else if (act === "show-all") { S.viewJob = null; S.page = 1; loadCreators(); }
-    else if (act === "more-suggestions") moreSuggestions(actEl);
-    else if (act === "hide-suggestions" || act === "show-suggestions") {
-      try { localStorage.setItem("scout.hideSuggestions", act === "hide-suggestions" ? "1" : "0"); } catch { /* storage blocked */ }
-      renderSuggestions();
-    }
     else if (act === "retry-scoring") {
       actEl.disabled = true;
       try {
@@ -1494,16 +1527,18 @@ function bindEvents() {
         startPolling();
       } catch (err) { toast(err.message, "err"); actEl.disabled = false; }
     }
-    else if (act === "pitch") draftPitch(actEl.dataset.id, actEl);
-    else if (act === "ai-check") {
-      actEl.disabled = true;
-      actEl.innerHTML = `<span class="spinner"></span> ${esc(S.meta.ai.label)} is reading their posts…`;
-      try {
-        await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(actEl.dataset.id)}/ai-check`, { method: "POST" });
-        renderDetail(await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(actEl.dataset.id)}`));
-        loadCreators({ quiet: true });
-      } catch (err) { toast(err.message, "err"); actEl.disabled = false; actEl.textContent = "Try again"; }
-    }
+    else if (act === "bulk-shortlist") bulkStatus("shortlisted");
+    else if (act === "bulk-hide-menu") reasonMenu(actEl, (r) => bulkStatus("hidden", r));
+    else if (act === "bulk-clear") { S.selected.clear(); renderBulk(); loadCreators({ quiet: true }); }
+    else if (act === "panel-close") closePanel();
+    else if (act === "panel-prev") moveCursor(-1);
+    else if (act === "panel-next") moveCursor(1);
+    else if (act === "panel-star") toggleStar(S.panelId);
+    else if (act === "panel-hide") { const id = S.panelId; reasonMenu(actEl, (r) => hideCreator(id, r)); }
+    else if (act === "panel-unhide") { await setStatus(S.panelId, null); toast("Visible again"); openPanel(S.panelId); loadCreators({ quiet: true }); }
+    else if (act === "deep") rescoreOne("deep", actEl);
+    else if (act === "ai-check") rescoreOne("ai", actEl);
+    else if (act === "pitch") draftPitch();
     else if (act === "copy") { await navigator.clipboard.writeText(actEl.dataset.text); toast("Copied"); }
     else if (act === "copy-pitch") { await navigator.clipboard.writeText($("#pitch-text").value); toast("Message copied"); }
     else if (act === "toggle-english" && S.pitch) {
@@ -1511,27 +1546,18 @@ function bindEvents() {
       $("#pitch-text").value = showEnglish ? S.pitch.english : S.pitch.message;
       actEl.dataset.shown = showEnglish ? "en" : "orig";
       actEl.textContent = showEnglish ? "Show original" : "Show English";
-    } else if (act === "toggle-shortlist") {
-      const on = actEl.dataset.status && actEl.dataset.status !== "hidden";
-      try {
-        await setStatus(actEl.dataset.id, on ? null : "shortlisted");
-        toast(on ? "Removed from shortlist" : "Added to shortlist", on ? "" : "ok");
-        openDetail(actEl.dataset.id);
-      } catch (err) { toast(err.message, "err"); }
-    } else if (act === "toggle-hide") {
-      const hidden = actEl.dataset.status === "hidden";
-      try {
-        await setStatus(actEl.dataset.id, hidden ? null : "hidden");
-        toast(hidden ? "Creator is visible again" : "Hidden from results");
-        $("#detail").close();
-      } catch (err) { toast(err.message, "err"); }
     }
   });
+
+  // Dialogs close on a backdrop click
+  $$("dialog").forEach((d) => d.addEventListener("click", (e) => { if (e.target === d) d.close(); }));
 }
 
 // ---------- Boot ----------
 (async function init() {
   bindEvents();
+  try { S.mode = localStorage.getItem("scout.mode") || "table"; } catch { /* storage blocked */ }
+  $$("#view-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
   try {
     [S.meta, S.companies] = await Promise.all([api("/api/meta"), api("/api/companies")]);
   } catch (e) {

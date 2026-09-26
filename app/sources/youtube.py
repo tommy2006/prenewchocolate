@@ -3,6 +3,7 @@
 Quota note: search costs 100 units, everything else 1 unit. The free daily quota is 10,000.
 """
 import asyncio
+import hashlib
 import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -112,6 +113,8 @@ def to_creator(channel: dict, videos: list[dict], found_via: str) -> dict:
         vt = vsn.get("thumbnails", {})
         posts.append({
             "title": vsn.get("title", ""),
+            # Start of the description: sponsor disclosures, discount codes and what the video is about.
+            "desc": (vsn.get("description") or "")[:400] if len(posts) < 12 else "",
             "url": f"https://www.youtube.com/watch?v={v['id']}",
             "thumb_src": (vt.get("medium") or vt.get("high") or vt.get("default") or {}).get("url"),
             "views": _int(vs.get("viewCount")),
@@ -181,6 +184,42 @@ async def discover(http, queries: list[str], market: str, language: str, fmin, f
     channels = await fetch_channels(http, list(via))
     channels = [c for c in channels if in_range(_subs(c), fmin, fmax)][:max_channels]
     return await _build(http, channels, via)
+
+
+def video_id(url: str) -> str | None:
+    m = re.search(r"[?&]v=([\w-]{6,})", url or "")
+    return m.group(1) if m else None
+
+
+async def fetch_comments(http, vid: str, n: int = 40) -> list[dict]:
+    """Top comments of one video (1 quota unit). Empty when comments are off."""
+    try:
+        data = await _get(http, "commentThreads", part="snippet", videoId=vid, maxResults=n,
+                          order="relevance", textFormat="plainText")
+    except YouTubeError:  # comments disabled, video removed, ...
+        return []
+    out = []
+    for item in data.get("items", []):
+        top = item.get("snippet", {}).get("topLevelComment", {}).get("snippet", {})
+        text = (top.get("textDisplay") or top.get("textOriginal") or "").strip()
+        if text:
+            author = (top.get("authorChannelId") or {}).get("value") or top.get("authorDisplayName") or ""
+            out.append({"text": text[:220], "author": hashlib.sha1(author.encode()).hexdigest()[:10] if author else "",
+                        "likes": top.get("likeCount") or 0})
+    return out
+
+
+async def sample_comments(http, creator: dict, videos: int = 2, per_video: int = 40) -> list[dict]:
+    """Comments from the latest normal videos that have some (Shorts comments are mostly one-liners)."""
+    posts = [p for p in creator.get("recent_posts", []) if not p.get("is_short") and (p.get("comments") or 0) > 0]
+    posts = posts[:videos] or [p for p in creator.get("recent_posts", []) if (p.get("comments") or 0) > 0][:videos]
+    found = []
+    for p in posts:
+        vid = video_id(p.get("url"))
+        if vid:
+            for c in await fetch_comments(http, vid, per_video):
+                found.append({**c, "post": p.get("url")})
+    return found
 
 
 async def lookup_handles(http, handles: list[str], label: str) -> list[dict]:
