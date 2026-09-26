@@ -633,6 +633,9 @@ th.num { text-align: right; }
 }
 .cites a::before { content: "↳ "; }
 .cites a:hover { color: var(--text); text-decoration: underline; }
+.claims .pts { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  font-variant-numeric: tabular-nums; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.dim-basis { margin: 6px 0 0; }
 .claims q { display: block; font-size: 12.5px; color: var(--muted); font-style: italic; margin-top: 2px; }
 .qparts { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; }
 .signals { margin-top: 4px; }
@@ -1096,7 +1099,6 @@ html[data-ui="modern"] .posters { grid-template-columns: repeat(auto-fill, minma
 .mscore .ring { --rs: 34px; --rw: 3.4; }
 .mscore > span:last-child { display: flex; flex-direction: column; line-height: 1.15; }
 .mscore b { font-size: 12px; font-weight: 700; }
-.mscore small { font-size: 11px; color: var(--muted); }
 .mpills { display: flex; flex-wrap: wrap; gap: 6px; }
 .mpill {
   display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px; border-radius: 999px;
@@ -1150,7 +1152,6 @@ html[data-ui="modern"] .field textarea, html[data-ui="modern"] .field input[type
   .mscores { left: 8px; bottom: 8px; gap: 5px; }
   .mscore { padding-right: 10px; gap: 6px; }
   .mscore .ring { --rs: 32px; }
-  .mscore small { display: none; }
   html[data-ui="modern"] .d-grid { grid-template-columns: 1fr; }
   html[data-ui="modern"] .d-aside { padding: 16px 16px 0; }
   html[data-ui="modern"] .d-cover { width: 120px; }

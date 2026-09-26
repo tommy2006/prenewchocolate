@@ -32,7 +32,7 @@ GOALS = {
 }
 
 
-VERSION = 4  # bump when scores are computed differently, so saved matches are re-scored on start
+VERSION = 6  # bump when scores are computed differently, so saved matches are re-scored on start
 UNPROVEN_MAX = 70  # a fit part with nothing cited behind it can't count as strong
 
 
@@ -130,9 +130,17 @@ def confidence(c: dict, checked: str) -> dict:
 
 
 def evidence_item(dim: str, sign: str, text: str, posts: list[dict] | None = None, quotes: list[str] | None = None,
-                  src: str = "data", fact: bool = True) -> dict:
-    """One claim behind a score. `posts` are {"title", "url"}; `quotes` are comment snippets."""
-    return {"dim": dim, "sign": sign, "text": text, "posts": posts or [], "quotes": quotes or [], "src": src, "fact": fact}
+                  src: str = "data", fact: bool = True, pts: str = "") -> dict:
+    """One claim behind a score. `posts` are {"title", "url"}; `quotes` are comment snippets.
+    `pts`: what the claim did to a quick score ("+15", "-10", "=90", "max 85"), so the lines add up to the number."""
+    item = {"dim": dim, "sign": sign, "text": text, "posts": posts or [], "quotes": quotes or [], "src": src, "fact": fact}
+    if pts:
+        item["pts"] = pts
+    return item
+
+
+# Where each quick (rules) score starts before the evidence moves it. Market is set outright by where they are.
+QUICK_START = {"content": 20, "audience": 55, "brand": 75, "readiness": 50}
 
 
 NEUTRAL_BASIS = {
@@ -241,6 +249,78 @@ def quality_word(s: int) -> str:
     return "Excellent audience" if s >= 85 else "Healthy audience" if s >= 75 else "Mixed audience" if s >= 55 else "Doubtful audience"
 
 
+# A short assessment from what we know about *this* creator: their strongest point and their weakest,
+# not a word picked from the score. Parts are only called good when something is cited for them.
+FIT_GOOD = {"content": "On-topic", "audience": "Right viewers", "market": "Right market",
+            "brand": "Brand-safe", "readiness": "Collab-ready"}
+FIT_BAD = {"content": "off-topic", "audience": "wrong viewers", "market": "wrong market",
+           "brand": "brand risk", "readiness": "hard to book"}
+QUALITY_GOOD = {"engagement": "Engaged", "authenticity": "Real viewers", "momentum": "Growing",
+                "consistency": "Steady views", "activity": "Posts often"}
+QUALITY_BAD = {"authenticity": "suspect viewers", "engagement": "low engagement", "activity": "rarely posts",
+               "momentum": "views falling", "consistency": "views swing"}
+
+
+def _pair_words(good: list[str], bad: list[str], fallback: str) -> str:
+    if good and bad:
+        return f"{good[0]}, {bad[0]}"
+    if bad:
+        return bad[0][:1].upper() + bad[0][1:] + (f", {bad[1]}" if len(bad) > 1 else "")
+    if good:
+        return good[0] + (f", {good[1][:1].lower() + good[1][1:]}" if len(good) > 1 else "")
+    return fallback
+
+
+def fit_headline(m: dict) -> str:
+    parts = m.get("fit_parts") or {}
+    if m.get("competitor_sponsor"):
+        return "Works with a competitor"
+    if (m.get("brand_safety") or 100) < 50:
+        return "Brand-safety risk"
+    if not parts:
+        return fit_word(m.get("fit") or 0)
+    ev = m.get("evidence") or []
+    weights = GOALS.get(m.get("goal") or "balanced", GOALS["balanced"])["parts"]
+    cited = {e["dim"] for e in ev if e["sign"] == "+"}
+    flagged = {e["dim"] for e in ev if e["sign"] == "-"}
+    # Weakest first, weighted by how much the part matters for this campaign goal.
+    bad = sorted((d for d in FIT_PARTS if parts[d] < 40 or (d in flagged and parts[d] < 60)),
+                 key=lambda d: (parts[d] - 100) * weights[d])
+    good = sorted((d for d in FIT_PARTS if parts[d] >= 70 and d in cited and d not in bad),
+                  key=lambda d: -parts[d] * weights[d])
+    if not bad and len(good) >= 4:
+        return "Fits on every count"
+    if not good and not bad:
+        return "Unproven fit" if m.get("checked", "rules") == "rules" else "Nothing stands out"
+    return _pair_words([FIT_GOOD[d] for d in good], [FIT_BAD[d] for d in bad], "")
+
+
+def quality_headline(c: dict) -> str:
+    notes = quality_notes(c)
+    good = [QUALITY_GOOD[k] for k in QUALITY_GOOD if notes[k][0] == "+"]
+    bad = [QUALITY_BAD[k] for k in QUALITY_BAD if notes[k][0] == "-"]
+    if len(good) >= 4 and not bad:
+        return "Strong on every count"
+    low = (c.get("authenticity") or {}).get("confidence") == "low"
+    return _pair_words(good, bad, "Too little data" if low else "Average audience")
+
+
+def _authenticity_lines(c: dict) -> str:
+    """Every signal behind the authenticity score with its points, so they add up (see audience.authenticity)."""
+    from .audience import CAP, NEUTRAL
+    auth = c.get("authenticity") or {}
+    signals = auth.get("signals") or []
+    if not signals:
+        return ""
+    lines = [f"Starts at {NEUTRAL}"] + [
+        f"{'+' if sig['kind'] == 'good' else '-'} {_clip(sig['text'], 100)}  [{sig.get('bonus') or -sig.get('penalty', 0):+d}]" for sig in signals]
+    raw = NEUTRAL + sum(sig.get("bonus", 0) - sig.get("penalty", 0) for sig in signals)
+    cap = CAP.get(auth.get("confidence") or "low", 100)
+    if raw > cap:
+        lines.append(f"? Counted as at most {cap}: {auth.get('confidence')} amount of data to confirm it")
+    return "\n".join(lines)
+
+
 def explain(c: dict, m: dict) -> dict:
     """Hover texts: first line = the verdict, then up to three short reasons about *this* creator.
     Lines start with "+ " (helps), "- " (hurts) or "? " (not checked)."""
@@ -253,15 +333,25 @@ def explain(c: dict, m: dict) -> dict:
     ranked = sorted(notes.items(), key=lambda kv: {"-": 0, "+": 1, "": 2}[kv[1][0]])
     q_lines = [f"{sign or '?'} {_clip(text, 70)}" for _, (sign, text) in ranked if sign][:3] or \
               [f"? {_clip(notes['authenticity'][1], 70)}"]
-    parts = {}
+    parts, quick = {}, m.get("checked", "rules") == "rules"
     for dim in FIT_PARTS:
         claims = [e for e in ev if e["dim"] == dim]
-        claims.sort(key=lambda e: e["sign"] != "-")  # a concern first: it explains why it isn't 100
-        parts[dim] = "\n".join({"-": "- ", "?": "? "}.get(e["sign"], "+ ") + _clip(e["text"], 70) for e in claims[:2]) \
-            or "? No specific evidence either way"
+        if quick:  # the lines add up to the number: the start, then each step with its points
+            head = [f"Starts at {QUICK_START[dim]}"] if dim in QUICK_START else []
+            lines = [{"-": "- ", "?": "? "}.get(e["sign"], "+ ") + _clip(e["text"], 110) + (f"  [{e['pts']}]" if e.get("pts") else "")
+                     for e in claims]
+        else:
+            claims.sort(key=lambda e: {"-": 0, "+": 1}.get(e["sign"], 2))  # a concern first: it explains why it isn't 100
+            head = ["The AI's score after reading their posts:"]
+            lines = [{"-": "- ", "?": "? "}.get(e["sign"], "+ ") + _clip(e["text"], 110) for e in claims]
+        parts[dim] = "\n".join(head + lines) if lines else "? No specific evidence either way"
+    fit_head, quality_head = fit_headline(m), quality_headline(c)
     return {
-        "fit": "\n".join([f"{fit_word(m.get('fit', 0))} · {m.get('fit', 0)}"] + fit_lines),
-        "quality": "\n".join([f"{quality_word(m.get('quality') or 0)} · {m.get('quality')}"] + q_lines),
+        "fit_word": fit_head,
+        "quality_word": quality_head,
+        "fit": "\n".join([f"{fit_head} · {m.get('fit', 0)}"] + fit_lines),
+        "quality": "\n".join([f"{quality_head} · {m.get('quality')}"] + q_lines),
         "parts": parts,
-        "qparts": {k: f"{sign or '?'} {_clip(text, 90)}" for k, (sign, text) in notes.items()},
+        "qparts": {**{k: f"{sign or '?'} {_clip(text, 90)}" for k, (sign, text) in notes.items()},
+                   "authenticity": _authenticity_lines(c) or f"{notes['authenticity'][0] or '?'} {_clip(notes['authenticity'][1], 90)}"},
     }

@@ -70,6 +70,7 @@ async def meta():
         "goals": GOALS,
         "fit_parts": scoring.FIT_PARTS,
         "quality_parts": {k: label for k, (label, _) in scoring.QUALITY_PARTS.items()},
+        "quick_start": scoring.QUICK_START,
         "reject_reasons": REJECT_REASONS,
         "sources": settings.source_status(),
         "ai": _ai_summary(),
@@ -335,7 +336,7 @@ def card(company: dict, c: dict, m: dict, partner_idx: dict | None = None) -> di
         "is_new": m.get("job_id") == company.get("last_job_id"),
         # Worked with this company before (from the imported tracker): their latest week, or True.
         "partner": ((partner["weeks"] or [True])[-1]) if partner else None,
-        "tips": {k: v for k, v in scoring.explain(c, m).items() if k in ("fit", "quality")},
+        "tips": {k: v for k, v in scoring.explain(c, m).items() if k in ("fit", "quality", "fit_word", "quality_word")},
     }
 
 

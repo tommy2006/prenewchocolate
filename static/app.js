@@ -663,14 +663,14 @@ function modernCardHtml(c, i) {
   const starred = c.status && c.status !== "hidden";
   const img = c.cover ? `<img src="${esc(c.cover)}" alt="" loading="lazy" data-name="${esc(c.name)}">` : placeholder(c.name);
   const meta = [`${fmtNum(c.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}`, S.meta.markets[c.country]?.name || c.country, c.niche].filter(Boolean).join(" · ");
-  const score = (label, value, kind, word) => `<span class="mscore" data-tip="${esc(c.tips?.[kind] || "")}">${ringHtml(value, "sm", { quick: c.checked === "rules" })}
-    <span><b>${label}</b><small>${word}</small></span></span>`;
+  const score = (label, value, kind) => `<span class="mscore" data-tip="${esc(c.tips?.[kind] || "")}">${ringHtml(value, "sm", { quick: c.checked === "rules" })}
+    <span><b>${label}</b></span></span>`;
   const tags = `${c.hidden_gem ? `<span class="mpill gem" ${tipAttr("gem", c)}>Hidden gem</span>` : ""}${c.partner ? `<span class="mpill partner" ${tipAttr("partner", c)}>Past partner</span>` : ""}${c.checked === "deep" ? `<span class="mpill" ${tipAttr("deep", c)}>✦ Evaluated</span>` : ""}`;
   return `<article class="card mcard ${i === S.cursor ? "cur" : ""} ${S.panelId === c.id ? "open" : ""}" data-id="${esc(c.id)}" data-i="${i}" tabindex="0" aria-label="${esc(c.name)}, fit ${c.fit}, quality ${c.quality}">
     <div class="mcard-img">${img}
       <span class="mplat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
       <button class="mstar ${starred ? "on" : ""}" data-star="${esc(c.id)}" title="${starred ? "On your shortlist" : "Add to shortlist"} (s)" aria-label="Shortlist">${starred ? ICONS.starOn : ICONS.star}</button>
-      <div class="mscores">${score("Fit", c.fit, "fit", fitWord(c.fit ?? 0).replace(" fit", ""))}${score("Quality", c.quality, "quality", qualityWord(c.quality ?? 0).replace(" audience", ""))}</div>
+      <div class="mscores">${score("Fit", c.fit, "fit")}${score("Quality", c.quality, "quality")}</div>
     </div>
     <div class="mcard-body">
       ${tags ? `<div class="mpills">${tags}</div>` : ""}
@@ -923,12 +923,13 @@ function detailClosed() {
   $$("#grid [data-id].open").forEach((el) => el.classList.remove("open"));
 }
 
-function claimHtml(e) {
+// One claim behind a score. `pts` (quick estimates only): what it did to the number, so the lines add up.
+function claimHtml(e, pts = false) {
   const cites = (e.posts || []).map((p) => `<a href="${esc(p.url)}" target="_blank" rel="noopener" title="Open this post">${esc(p.title || "post")}</a>`).join("");
   const quotes = (e.quotes || []).map((q) => `<q>${esc(q)}</q>`).join("");
   const [cls, mark] = { "-": ["minus", "−"], "?": ["unknown", "?"] }[e.sign] || ["plus", "+"];
   return `<li class="${cls}"><span class="sign">${mark}</span>
-    <div>${esc(e.text)}${cites ? `<div class="cites">${cites}</div>` : ""}${quotes}</div></li>`;
+    <div>${esc(e.text)}${pts && e.pts ? ` <span class="pts">${esc(e.pts.replace("-", "−"))}</span>` : ""}${cites ? `<div class="cites">${cites}</div>` : ""}${quotes}</div></li>`;
 }
 
 function barHtml(value) {
@@ -984,8 +985,12 @@ function renderDetail(d) {
   const dims = Object.entries(S.meta.fit_parts).map(([k, label]) => {
     const v = m.fit_parts?.[k] ?? 0;
     const claims = ev.filter((e) => e.dim === k);
+    const quick = m.checked === "rules";
+    const start = S.meta.quick_start?.[k];
+    const basis = quick ? (start != null ? `Quick estimate: starts at ${start}, then` : "Quick estimate, set by where they and their viewers are:") : "The AI's score after reading their posts. What it saw:";
     return `<div class="dim"><div class="dim-head" data-tip="${esc(`${label} · ${v}\n${x.parts[k] || ""}`)}"><span>${esc(label)}</span>${barHtml(v)}<b>${v}</b></div>
-      ${claims.length ? `<ul class="claims">${claims.map(claimHtml).join("")}</ul>` : `<p class="muted small">No specific evidence either way.</p>`}</div>`;
+      ${claims.length ? `<p class="muted small dim-basis">${esc(basis)}</p><ul class="claims">${claims.map((e) => claimHtml(e, quick)).join("")}</ul>`
+        : `<p class="muted small">No specific evidence either way.</p>`}</div>`;
   }).join("");
   const qparts = Object.entries(S.meta.quality_parts).map(([k, label]) => {
     const v = m.quality_parts?.[k] ?? 0;
@@ -1037,9 +1042,9 @@ function renderDetail(d) {
 
           <div class="d-scores">
             <div class="scorecard" data-tip="${esc(x.fit || "")}">${ringHtml(m.fit, "lg", { quick: m.checked === "rules" })}
-              <div><strong>${fitWord(m.fit)}</strong><small>How well they suit ${esc(S.company.name)}: content, audience, market, brand and cost.</small></div></div>
+              <div><strong>${esc(x.fit_word || fitWord(m.fit))}</strong><small>How well they suit ${esc(S.company.name)}: content, audience, market, brand and cost.</small></div></div>
             <div class="scorecard" data-tip="${esc(x.quality || "")}">${ringHtml(m.quality, "lg", { quick: m.checked === "rules" })}
-              <div><strong>${qualityWord(m.quality)}</strong><small>Whether their viewers are real, engaged and still growing.</small></div></div>
+              <div><strong>${esc(x.quality_word || qualityWord(m.quality))}</strong><small>Whether their viewers are real, engaged and still growing.</small></div></div>
           </div>
 
           <div class="glance">
