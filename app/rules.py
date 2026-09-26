@@ -135,8 +135,59 @@ def _tag_hits(tag: str, text: str, found_games: list[str], niche_name: str) -> b
     return bool(words) and all(re.search(r"(?<!\w)" + re.escape(w), text) for w in words)
 
 
-# Games whose audiences skew young (many viewers under 13): parents buy, the viewers can't.
-KIDS_GAMES = {"Roblox", "Brawl Stars", "Geometry Dash", "Among Us", "Pokémon", "Clash Royale", "Clash of Clans"}
+# Official PEGI age ratings (Europe) of the games in GAMES; games without a clear rating are left out.
+# A clue to the audience's age, not a rule: many adults play Minecraft too.
+GAME_AGE = {
+    "Minecraft": 7, "Roblox": 7, "Brawl Stars": 7, "Clash Royale": 7, "Clash of Clans": 7, "Among Us": 7, "Pokémon": 7,
+    "Stardew Valley": 7, "Hollow Knight": 7,
+    "Fortnite": 12, "League of Legends": 12, "Overwatch": 12, "The Sims": 12, "Genshin Impact": 12, "Terraria": 12,
+    "World of Warcraft": 12,
+    "Valorant": 16, "Apex Legends": 16, "Elden Ring": 16, "Dark Souls": 16,
+    "GTA": 18, "Counter-Strike 2": 18, "Call of Duty": 18, "Rainbow Six Siege": 18, "Battlefield": 18, "Helldivers 2": 18,
+    "EA Sports FC": 3, "Rocket League": 3, "Euro Truck Simulator": 3, "Farming Simulator": 3, "Assetto Corsa": 3,
+}
+AGE_LABEL = {"young": "Skews young (many under 13)", "teen": "Mostly teenagers", "older": "Mostly 16+", "mixed": "Mixed ages"}
+
+
+def age_estimate(c: dict, found: list[tuple[str, int]] | None = None) -> dict:
+    """Who is likely watching, from two clues: the age ratings of the games they post about, and what commenters
+    say about themselves (school vs work, stated ages). {"band", "label", "clues": [...]}; band "" = no clue."""
+    found = games(c) if found is None else found
+    n_posts = max(1, len(_texts(c)))
+    by_band = {"young": 0, "teen": 0, "older": 0}
+    for game, n in found:
+        rating = GAME_AGE.get(game)
+        if rating is not None and rating >= 7:
+            by_band["young" if rating <= 7 else "teen" if rating == 12 else "older"] += n
+    votes, clues = [], []
+    band, n = max(by_band.items(), key=lambda kv: kv[1])
+    if n / n_posts >= 0.3:
+        rated = [f"{g} (PEGI {GAME_AGE[g]})" for g, k in found if k and g in GAME_AGE and GAME_AGE[g] >= 7][:2]
+        votes.append(band)
+        clues.append(f"Games: mostly {', '.join(rated)}")
+    a = c.get("audience") or {}
+    sampled = a.get("sampled") or 0
+    if sampled >= 20:
+        young, adult = a.get("young_hints") or 0, a.get("adult_hints") or 0
+        if young >= 3 and young / sampled >= 0.04 and young > adult:
+            votes.append("young")
+            clues.append(f"Comments: {young} of {sampled} mention school or an age under 16")
+        elif adult >= 3 and adult / sampled >= 0.03 and adult > young:
+            votes.append("older")
+            clues.append(f"Comments: {adult} of {sampled} mention work, partners, their own kids or an adult age")
+    if not votes:
+        return {"band": "", "label": "Unclear", "clues": []}
+    final = votes[0] if len(set(votes)) == 1 else "mixed"
+    return {"band": final, "label": AGE_LABEL[final], "clues": clues}
+
+
+def comment_quotes(c: dict, kind: str, n: int = 2) -> list[str]:
+    """Example comments behind a clue ("young", "adult", "buying"), for the evidence."""
+    sample = c.get("comment_sample") or []
+    idx = ((c.get("audience") or {}).get("notable") or {}).get(kind) or []
+    return [sample[i]["text"][:140] for i in idx[:n] if i < len(sample)]
+
+
 # Content that means viewers are shopping for hardware.
 BUYER_NICHES = {"PC building", "Tech reviews", "Gaming setup", "Budget gaming"}
 
@@ -180,24 +231,41 @@ def quick_score(c: dict, company: dict, search: dict) -> dict:
     elif wanted and not gaming:
         ev.append(scoring.evidence_item("content", "-", f"No sign of {', '.join(wanted[:3])} in their recent posts", fact=False))
 
-    # Audience: would the people watching actually buy?
+    # Audience: would the people watching actually buy? Age (game ratings, what commenters say), buying interest.
     audience, a = 55, c.get("audience") or {}
     min_age = profile.get("min_audience_age") or 0
-    if found and found[0][0] in KIDS_GAMES and main_game_share >= 0.3 and min_age >= 13:
-        audience -= 20
-        ev.append(scoring.evidence_item("audience", "-", f"{found[0][0]} audiences skew young (many viewers under 13)",
-                                        scoring.cite(_posts_matching(c, _GAME_RE[found[0][0]])), fact=False))
+    rated = [(g, n) for g, n in found if n and GAME_AGE.get(g, 0) >= 7]
+    age = age_estimate(c, found)
+    if rated and age["clues"] and age["clues"][0].startswith("Games"):
+        top = rated[0][0]
+        posts_cited = scoring.cite(_posts_matching(c, _GAME_RE[top]))
+        if GAME_AGE[top] <= 7:
+            audience -= 15 if min_age >= 13 else 8
+            ev.append(scoring.evidence_item("audience", "-", f"Mostly {top} (PEGI {GAME_AGE[top]}): games rated for age 7 and up draw many young viewers", posts_cited))
+        elif GAME_AGE[top] >= 16:
+            audience += 10
+            ev.append(scoring.evidence_item("audience", "+", f"Mostly {top} (PEGI {GAME_AGE[top]}): viewers are more likely old enough to buy", posts_cited))
+    if (a.get("sampled") or 0) >= 20:
+        sampled, young, adult = a["sampled"], a.get("young_hints") or 0, a.get("adult_hints") or 0
+        if young >= 3 and young / sampled >= 0.04 and young > adult:
+            audience -= 10
+            ev.append(scoring.evidence_item("audience", "-", f"{young} of {sampled} sampled comments mention school or an age under 16",
+                                            quotes=comment_quotes(c, "young")))
+        elif adult >= 3 and adult / sampled >= 0.03 and adult > young:
+            audience += 5
+            ev.append(scoring.evidence_item("audience", "+", f"{adult} of {sampled} sampled comments mention work, partners, their own kids or an adult age",
+                                            quotes=comment_quotes(c, "adult")))
     buyer_posts = [p for n in BUYER_NICHES for p in _posts_matching(c, _NICHE_RE[n])]
     if len(buyer_posts) >= 2:
         audience += 15
         ev.append(scoring.evidence_item("audience", "+", "Talks about PC hardware and setups: viewers are shopping for gear",
                                         scoring.cite(list({p.get("url"): p for p in buyer_posts}.values())), fact=False))
     if (a.get("sampled") or 0) >= 15:
-        if a.get("advice_share", 0) >= 0.03:
+        buying = a.get("buying_questions") or 0
+        if buying >= 2 and buying / a["sampled"] >= 0.03:
             audience += 10
-            quotes = list(dict.fromkeys(x["text"][:140] for x in c.get("comment_sample", [])
-                                        if "?" in x["text"] and audience_mod.ADVICE.search(x["text"])))[:2]
-            ev.append(scoring.evidence_item("audience", "+", "Viewers ask them for buying advice in the comments", quotes=quotes, fact=False))
+            ev.append(scoring.evidence_item("audience", "+", f"Viewers ask what to buy: {buying} of {a['sampled']} sampled comments ask about specs, prices or where to get it",
+                                            quotes=comment_quotes(c, "buying")))
         elif a.get("question_share", 0) >= 0.12:
             audience += 5
     audience = max(20, min(85, audience))

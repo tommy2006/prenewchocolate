@@ -83,6 +83,43 @@ ADVICE = re.compile(r"\b(which|what|recommend|should i|worth it|budget|price|spe
                     r"melyik|milline|kurš|kuris)\b", re.I)
 
 
+# Age clues in comments. Stated ages ("I'm 12", "olen 12", "ich bin 12", "mam 12 lat", "12 éves"...).
+AGE_STATED = re.compile(
+    r"(?:\b(?:i'?m|i am|im|olen|oon|jag är|jeg er|ich bin|ik ben|ma olen|tengo|ho|j'ai)\s+(\d{1,2})\s*"
+    r"(?:years?|yrs?|yo|y/o|vuotias|vuotta|v\b|år|jahre|jaar|aastane|años|anni|ans|and|ja|och|og|und|en|,|\.|!|$))"
+    r"|(?:\bmam\s+(\d{1,2})\s*lat\b)|(?:\b(\d{1,2})\s*éves\b)", re.I)
+# School and homework: viewers who are still at school.
+YOUNG_WORDS = re.compile(
+    r"\b(?<!old )(?<!old-)(school|homework|teacher|koulu\w*|läksy\w*|läksyt|opettaj\w*|skola|skolan|läxa\w*|lärare\w*|"
+    r"skole\w*|lekse\w*|lærer\w*|schule|hausaufgabe\w*|lehrer\w*|huiswerk|leraar|szkoł\w*|lekcj\w*|nauczyciel\w*|"
+    r"iskol\w*|házi|tanár\w*|kooli\w*|kodutöö\w*|õpetaja\w*|école|devoirs|escuela|deberes|scuola|compiti)\b", re.I)
+# Work, partners and their own kids: grown-up viewers (who can buy).
+ADULT_WORDS = re.compile(
+    r"\b(my (wife|husband|kids|son|daughter|boss|job|salary|mortgage)|at work|after work|vaimo\w*|mieheni|lapseni|"
+    r"poikani|tyttäreni|töissä|töiden jälkeen|palkka\w*|asuntolaina|min fru|min man|mina barn|på jobbet|efter jobbet|"
+    r"lönen|min kone|mine barn|på jobb|meine frau|mein mann|meine kinder|auf der arbeit|nach der arbeit|gehalt|"
+    r"mijn vrouw|mijn man|mijn kinderen|op het werk|moja żona|mój mąż|moje dzieci|w pracy|po pracy|feleségem|férjem|"
+    r"gyerekeim|munkahelyen|minu naine|minu mees|mu lapsed|ma femme|mon mari|mes enfants|au travail|mi esposa|"
+    r"mi marido|mis hijos|en el trabajo|mia moglie|mio marito|i miei figli|al lavoro)\b", re.I)
+# Viewers asking what to buy: specs, prices, where to get it. Generic words ("price", "worth it") only count
+# in a question, so "totally worth it" or "the price is insane" don't.
+BUYING = re.compile(
+    r"\b(what|which) (pc|gpu|cpu|graphics card|specs|setup|mouse|keyboard|monitor|headset|computer)|"
+    r"your (specs|setup|pc)\b|where did you (buy|get)|how much (did|does|is|was)|should i (buy|get)|"
+    r"mistä (ostit|sait|saa)|mikä (kone|näyttis|prosessori|näytönohjain)|kannattaako|vad kostar|var köpte|"
+    r"vilken (dator|grafikkort)|hur mycket kostar|hvad koster|hvor køb|was kostet|wo (hast du|gekauft)|"
+    r"welche (grafikkarte|gpu|cpu)|hoeveel kost|waar heb je|ile kosztuje|gdzie kupi|jaki (komputer|sprzęt|procesor)|"
+    r"mennyibe|hol vetted|milyen (gép|videókártya)|mis maksab|kust ostsid|combien|où as-tu|cuánto cuesta|"
+    r"dónde compraste|quanto costa", re.I)
+BUYING_WEAK = re.compile(r"\b(price|specs?|worth (buying|it)|hinta|paljonko|speksit|lohnt sich|preis)\b", re.I)
+
+
+def age_stated(text: str) -> int | None:
+    m = AGE_STATED.search(text or "")
+    age = next((int(g) for g in (m.groups() if m else ()) if g), None)
+    return age if age and 6 <= age <= 70 else None
+
+
 def _norm_comment(text: str) -> str:
     return " ".join(WORD_RE.findall((text or "").lower()))
 
@@ -95,7 +132,8 @@ def analyze_comments(comments: list[dict]) -> dict | None:
     n = len(comments)
     langs, generic, spam, questions, advice = Counter(), 0, 0, 0, 0
     texts = Counter()
-    for c in comments:
+    notable = {"young": [], "adult": [], "buying": []}  # indices of the comments behind each clue
+    for i, c in enumerate(comments):
         text = c["text"]
         words = WORD_RE.findall(text.lower())
         lang = guess_language(text)
@@ -109,6 +147,13 @@ def analyze_comments(comments: list[dict]) -> dict | None:
             questions += 1
             if ADVICE.search(text):
                 advice += 1
+        age = age_stated(text)
+        if (age and age < 16) or YOUNG_WORDS.search(text):
+            notable["young"].append(i)
+        elif (age and age >= 18) or ADULT_WORDS.search(text):
+            notable["adult"].append(i)
+        if BUYING.search(text) or ("?" in text and (BUYING_WEAK.search(text) or (ADVICE.search(text) and len(words) >= 3))):
+            notable["buying"].append(i)
         norm = _norm_comment(text)
         if len(norm) >= 8:
             texts[norm] += 1
@@ -124,12 +169,17 @@ def analyze_comments(comments: list[dict]) -> dict | None:
         "unique_authors": round(len(set(authors)) / len(authors), 2) if authors else None,
         "question_share": round(questions / n, 2),
         "advice_share": round(advice / n, 2),
+        # Who the commenters are: school vs work (or a stated age), and whether they ask what to buy.
+        "young_hints": len(notable["young"]),
+        "adult_hints": len(notable["adult"]),
+        "buying_questions": len(notable["buying"]),
+        "notable": {k: v[:6] for k, v in notable.items()},
     }
 
 
 # --- Authenticity -----------------------------------------------------------------------------
 
-VERSION = 2  # bump when the assessment changes, so saved creators are re-assessed on start
+VERSION = 3  # bump when the assessment changes, so saved creators are re-assessed on start
 
 # Authenticity starts neutral: "nothing suspicious found" is not proof of a real audience. Positive evidence
 # raises it, warning signs lower it, and with little data it can't get high at all.

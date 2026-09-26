@@ -242,7 +242,7 @@ async def fetch_comments(http, vid: str, n: int = 40) -> list[dict]:
     return out
 
 
-async def sample_comments(http, creator: dict, videos: int = 2, per_video: int = 40) -> list[dict]:
+async def sample_comments(http, creator: dict, videos: int = 3, per_video: int = 35) -> list[dict]:
     """Comments from the latest normal videos that have some (Shorts comments are mostly one-liners)."""
     posts = [p for p in creator.get("recent_posts", []) if not p.get("is_short") and (p.get("comments") or 0) > 0]
     posts = posts[:videos] or [p for p in creator.get("recent_posts", []) if (p.get("comments") or 0) > 0][:videos]

@@ -22,9 +22,14 @@ Scout automates influencer discovery for brands like Prenew, with a focus on mic
    An optional **AI web scout** lets Claude search forums, local creator lists and press for creators that
    hashtags miss. It's off by default: it runs paid web searches (about $1–3 per market).
 3. **Filter.** Keeps only creators inside the follower range who posted in the last 4 months.
-4. **Read the audience.** For YouTube creators Scout samples real viewer comments from their latest videos
+4. **Read the audience.** For YouTube creators Scout samples about 100 real viewer comments from their 3 latest videos
    (1 quota unit per video): which language viewers write in, whether comments are real conversation or emoji and
-   copy-paste, whether viewers ask for advice. Together with views per follower, likes per view and comments per like
+   copy-paste, whether viewers **ask what to buy** (specs, prices, where to get it) and what commenters say about
+   themselves (school and homework vs work, partners, their own kids, or a stated age). The **likely age** combines
+   that with the official **age ratings (PEGI)** of the games they post about (Minecraft 7, Fortnite 12, GTA 18...),
+   which also works on TikTok and Twitch where comments can't be read. Both feed the Audience part of Fit as evidence
+   with the comments quoted, and the AI gets the most telling comments to cite. A clue, not a head count: only the
+   creator's own analytics show real ages. Together with views per follower, likes per view and comments per like
    (compared with accounts of the same size), this gives an **authenticity** score with the signals behind it
    ("only 3% of followers watch a typical post", "many likes but almost no comments"). Signals, never "bots detected".
    It starts at a neutral 70 ("nothing suspicious found" isn't proof), rises only with positive evidence, and can't

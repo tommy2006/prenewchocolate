@@ -498,6 +498,9 @@ async def creator_detail(company_id: str, creator_id: str):
         "typical": {"rate": TYPICAL_RATE.get(c["platform"], {}).get(c.get("tier") or ""),
                     "reach": TYPICAL_REACH.get(c["platform"], {}).get(c.get("tier") or "")},
         "quality_notes": {k: {"sign": sign, "text": text} for k, (sign, text) in scoring.quality_notes(c).items()},
+        # Who is likely watching: game age ratings and what commenters say, with example comments.
+        "age": rules.age_estimate(c),
+        "comment_clues": {k: rules.comment_quotes(c, k, 3) for k in ("young", "adult", "buying")},
     }
 
 

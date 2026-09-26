@@ -14,6 +14,7 @@ import httpx
 from . import config, partners, settings
 from .store import store
 from .markets import LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS
+from .rules import age_estimate
 
 log = logging.getLogger("scout")
 
@@ -543,7 +544,7 @@ SCORE_SYSTEM = """You are an influencer-marketing analyst. You judge, the way an
 
 Score each creator from 0 to 100 on:
 - content_fit: how closely their actual recent content matches the creator types and focus in the search (or, if none are given, what would sell this brand). 90+ = core niche, posts about it regularly. 60-80 = adjacent. Below 40 = unrelated.
-- audience_fit: how likely their viewers are the brand's customers: age (respect the brand's minimum audience age), interest in what the brand sells, buying power, trust in the creator (do viewers ask them for advice?).
+- audience_fit: how likely their viewers are the brand's customers: age (respect the brand's minimum audience age), interest in what the brand sells, buying power, trust in the creator (do viewers ask them for advice?). Use likely_audience_age (game age ratings and what commenters say about school, work or their age) and comments_asking_what_to_buy, and cite the comments that show it.
 - market_fit: how likely their audience is in the target markets, from post language, comment language, stated location and platform country. 90+ = clearly local. 50 = unclear. Below 30 = elsewhere.
 - brand_fit: whether their tone and values suit the brand and would make its message believable. Lower it for anything on the brand's "never work with" list.
 - readiness: how ready they are for a collaboration: contact details, experience with sponsored posts or codes (but not so many ads that viewers tune out), posting regularly, a format where a sponsored segment fits naturally, and a likely price within the brand's budget.
@@ -597,12 +598,29 @@ def _audience_facts(c: dict) -> dict:
         "comment_languages": a.get("languages") or None,
         "generic_comment_share": a.get("generic_share"),
         "question_share": a.get("question_share"),
+        "likely_audience_age": _age_clues(c),
+        "comments_asking_what_to_buy": f"{a['buying_questions']} of {a['sampled']}" if a.get("buying_questions") else None,
         "authenticity_signals": [x["text"] for x in auth.get("signals", [])] or None,
         "sponsored_posts": f"{sp.get('sponsored', 0)} of {sp.get('checked', 0)}" if sp.get("checked") else None,
         "posts_with_discount_codes": sp.get("with_codes") or None,
         "has_email": bool(c.get("emails")),
         "estimated_price_eur": f"{c['price']['low']}-{c['price']['high']}" if c.get("price") else None,
     }
+
+
+def _age_clues(c: dict) -> str | None:
+    """"Skews young (many under 13): Games: mostly Minecraft (PEGI 7); Comments: 5 of 90 mention school..." """
+    age = age_estimate(c)
+    return f"{age['label']}: " + "; ".join(age["clues"]) if age["band"] else None
+
+
+def _comment_picks(c: dict, n: int) -> list[int]:
+    """Which sampled comments the AI sees: the ones behind the age and buying clues first, then the top ones.
+    Their refs stay their position in the sample, so cited comments resolve to the right text."""
+    notable = (c.get("audience") or {}).get("notable") or {}
+    first = [i for kind in ("buying", "young", "adult") for i in notable.get(kind, [])[:3]]
+    picks = list(dict.fromkeys(first + list(range(len(c.get("comment_sample") or [])))))
+    return sorted(picks[:n])
 
 
 def _compact(c: dict, lite: bool = False, n_posts: int | None = None, n_comments: int = 8, desc_len: int = 0) -> dict:
@@ -635,8 +653,8 @@ def _compact(c: dict, lite: bool = False, n_posts: int | None = None, n_comments
              **({"short": True} if p.get("is_short") else {})}
             for i, p in enumerate(c.get("recent_posts", [])[:n])
         ],
-        **({"sample_comments": [{"ref": f"c{i + 1}", "text": x["text"][:140]}
-                                for i, x in enumerate(c.get("comment_sample", [])[:n_comments])]}
+        **({"sample_comments": [{"ref": f"c{i + 1}", "text": c["comment_sample"][i]["text"][:140]}
+                                for i in _comment_picks(c, n_comments)]}
            if n_comments and not lite and c.get("comment_sample") else {}),
     }
 
@@ -660,7 +678,7 @@ def _resolve(c: dict, dim: str, sign: str, claim: str, post_refs: list, comment_
     for ref in comment_refs or []:
         m = REF_RE.fullmatch(str(ref).strip())
         i = int(m.group(2)) - 1 if m and m.group(1).lower() == "c" else -1
-        if 0 <= i < min(len(comments), 30):
+        if 0 <= i < len(comments):
             cited += 1
             quotes.append(comments[i]["text"][:160])
         else:

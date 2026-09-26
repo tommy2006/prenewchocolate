@@ -1081,6 +1081,7 @@ function renderDetail(d) {
           <div class="sections">
             ${section("fit", "Fit in detail", `${ev.filter((e) => e.sign !== "?").length} pieces of evidence from their posts, comments and numbers`, dims, open)}
             ${section("quality", "Audience quality in detail", warnings ? `${warnings} warning sign${warnings > 1 ? "s" : ""}` : "no warning signs", `
+              ${audienceWhoHtml(d)}
               <div class="qparts">${qparts}</div>
               ${signals ? `<ul class="claims signals">${signals}</ul>` : `<p class="muted small">No warning signs in the numbers we have.</p>`}
               ${langs ? `<p class="small">Comment languages (${aud.sampled} sampled): ${langs}</p>` : ""}
@@ -1225,6 +1226,7 @@ function renderStats(d) {
         <section class="s-card">
           <div class="s-card-head"><h4>Audience</h4></div>
           <div class="s-auth">${ringHtml(auth.score, "sm")}<div><b>Authenticity ${auth.score ?? "—"}</b><small>${esc(d.quality_notes?.authenticity?.text || "")}</small></div></div>
+          ${audienceWhoHtml(d)}
           ${cr.reach != null ? `<div class="meter-block">
             <div class="meter-label"><b>${Math.round(cr.reach * 100)}%</b> of followers watch a typical post${typical.reach ? ` · typical for their size ${Math.round(typical.reach * 100)}%` : ""}</div>
             <div class="meter"><i style="width:${Math.min(100, (cr.reach / reachMax) * 100)}%"></i>${typical.reach ? `<span class="meter-mark" style="left:${(typical.reach / reachMax) * 100}%" title="Typical for their size"></span>` : ""}</div></div>` : ""}
@@ -1302,6 +1304,24 @@ function closePlayer() {
   player.hidden = true;
   player.innerHTML = "";  // stops the video
   $$("#detail .vid.playing").forEach((v) => v.classList.remove("playing"));
+}
+
+// Who is likely watching: age (game ratings, what commenters say) and whether viewers ask what to buy.
+function audienceWhoHtml(d) {
+  const age = d.age || { band: "", label: "Unclear", clues: [] };
+  const a = d.creator.audience || {};
+  const clues = d.comment_clues || {};
+  const quotes = (list) => (list || []).map((q) => `<q>${esc(q)}</q>`).join("");
+  const ageQuotes = age.band === "young" ? clues.young : age.band === "older" ? clues.adult : [];
+  const tip = "Likely age\nFrom the official age ratings (PEGI) of the games they post about, and what commenters say about "
+    + "themselves (school or homework vs work, partners, their own kids, or a stated age). A clue, not a head count: "
+    + "only the creator's own analytics show real ages.";
+  return `<div class="who-watch">
+    <div class="who-row" data-tip="${esc(tip)}"><span>Likely age</span><b class="age-${esc(age.band || "none")}">${esc(age.label)}</b></div>
+    ${age.clues.length ? `<ul class="who-clues">${age.clues.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : `<p class="muted small">No age clues yet: no rated games in their recent posts and no comments that say.</p>`}
+    ${quotes(ageQuotes)}
+    ${a.sampled ? `<div class="who-row"><span>Asking what to buy</span><b>${a.buying_questions || 0} of ${a.sampled} comments</b></div>${quotes(clues.buying)}` : ""}
+  </div>`;
 }
 
 function pitchHtml(p, cr) {
