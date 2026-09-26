@@ -50,11 +50,14 @@ ABOUT = [
             "incl. comment language), brand & safety, and readiness & cost (contact, sponsor experience, price vs budget). "
             "Every part is backed by evidence that cites posts or comments."),
     ("Audience quality", "0-100: is the audience real and paying attention? Authenticity 35%, engagement vs typical "
-                         "35-30%, consistency 15% (share of posts reaching half the average), activity 10%, momentum 10% (views trend)."),
+                         "30%, consistency 15% (how steady views are across the middle half of posts), activity 10%, "
+                         "momentum 10% (views trend)."),
     ("Confidence", "How much the scores rest on: whether the AI read their posts (or did a deep evaluation), "
                    "how many posts, likes and comments were available."),
-    ("Authenticity", "100 = nothing suspicious. Lowered by signals such as few followers watching, likes far above "
-                     "typical, many likes but no comments, or generic/copy-paste comments. Signals, not proof."),
+    ("Authenticity", "Starts at a neutral 70 (nothing suspicious found). Raised by positive evidence (many followers "
+                     "watching, real conversation in comments), lowered by signals such as few followers watching, likes "
+                     "far above typical, many likes but no comments, or generic/copy-paste comments. Capped when there is "
+                     "little data. Signals, not proof."),
     ("Est. price per post", "A rough range: median views × common rates per 1,000 views (YouTube €15-30, TikTok €8-18). "
                             "Check with the creator."),
 ]

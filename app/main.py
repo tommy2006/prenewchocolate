@@ -310,6 +310,7 @@ def card(company: dict, c: dict, m: dict, partner_idx: dict | None = None) -> di
         "is_new": m.get("job_id") == company.get("last_job_id"),
         # Worked with this company before (from the imported tracker): their latest week, or True.
         "partner": ((partner["weeks"] or [True])[-1]) if partner else None,
+        "tips": {k: v for k, v in scoring.explain(c, m).items() if k in ("fit", "quality")},
     }
 
 
@@ -455,6 +456,8 @@ async def creator_detail(company_id: str, creator_id: str):
                                             "views_window", "emails")} for o in others],
         "partner": {"weeks": partner["weeks"], "collabs": partner["collabs"]} if partner else None,
         "agency": agency_hint(c) or bool(partner and partner["agency"]),
+        "explain": scoring.explain(c, m),
+        "quality_notes": {k: {"sign": sign, "text": text} for k, (sign, text) in scoring.quality_notes(c).items()},
     }
 
 

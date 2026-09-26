@@ -72,6 +72,36 @@ function toast(msg, kind = "", action = null) {
   setTimeout(() => el.remove(), kind === "err" ? 6000 : action ? 6000 : 3500);
 }
 
+// ---------- Hover explanations ----------
+// Any element with data-tip shows a short explanation on hover. Line 1 is the headline; the other lines start
+// with "+ " (helps), "- " (hurts) or "? " (not checked yet).
+const tipEl = document.createElement("div");
+tipEl.className = "tip";
+tipEl.setAttribute("role", "tooltip");
+
+function tipHtml(text) {
+  const lines = String(text).split("\n").filter(Boolean);
+  const mark = { "+": ["plus", "+"], "-": ["minus", "−"], "?": ["unknown", "?"] };
+  return lines.map((line, i) => {
+    const m = mark[line[0]] && line[1] === " " ? mark[line[0]] : null;
+    if (m) return `<div class="tip-line ${m[0]}"><span>${m[1]}</span>${esc(line.slice(2))}</div>`;
+    return i === 0 && lines.length > 1 ? `<div class="tip-head">${esc(line)}</div>` : `<div class="tip-line">${esc(line)}</div>`;
+  }).join("");
+}
+
+function showTip(el) {
+  const host = el.closest("dialog[open]") || document.body;  // a modal window sits above the page
+  if (tipEl.parentElement !== host) host.append(tipEl);
+  tipEl.innerHTML = tipHtml(el.dataset.tip);
+  tipEl.hidden = false;
+  const r = el.getBoundingClientRect();
+  const t = tipEl.getBoundingClientRect();
+  const below = r.bottom + 8 + t.height < window.innerHeight;
+  tipEl.style.top = `${below ? r.bottom + 8 : r.top - t.height - 8}px`;
+  tipEl.style.left = `${Math.max(8, Math.min(window.innerWidth - t.width - 8, r.left + r.width / 2 - t.width / 2))}px`;
+}
+function hideTip() { tipEl.hidden = true; }
+
 // ---------- State ----------
 // Search criteria (saved per company, used for both filtering and new searches)
 const DEFAULT_SEARCH = { tags: [], markets: [], platforms: [], tiers: [], follower_min: null, follower_max: null, deal_types: [], avoid: [], example_creators: [], ai_scout: false };
@@ -185,7 +215,7 @@ function setCompany(company) {
   S.undo = null;
   $("#q").value = "";
   $("#understood").hidden = true;
-  closePanel();
+  closeDetail();
   renderFilters();
   refresh();
   stopPolling();
@@ -296,8 +326,7 @@ function renderPlatforms() {
 }
 
 function updateAdvCount() {
-  const n = S.f.deal_types.length + S.f.avoid.length + S.f.example_creators.length + (S.f.ai_scout ? 1 : 0)
-    + (S.f.language ? 1 : 0) + (S.f.min_score ? 1 : 0) + (S.f.min_eng ? 1 : 0)
+  const n = (S.f.language ? 1 : 0) + (S.f.min_score ? 1 : 0) + (S.f.min_eng ? 1 : 0)
     + (S.f.has_email ? 1 : 0) + (S.f.gems ? 1 : 0) + (S.f.growing ? 1 : 0) + (S.f.show_hidden ? 1 : 0);
   $("#adv-count").hidden = !n;
   $("#adv-count").textContent = n;
@@ -540,11 +569,8 @@ async function loadCreators({ quiet = false } = {}) {
 function scoreHtml(value, c, kind) {
   const quick = c.checked === "rules";
   const low = c.confidence === "low";
-  const tip = kind === "fit"
-    ? `Fit ${value}: would a marketer pick them for ${S.company.name}?`
-    : `Audience quality ${value}: is the audience real and paying attention?`;
-  const note = quick ? " Quick score from rules; the AI hasn't read their posts yet." : c.checked === "deep" ? " Deep evaluation done." : "";
-  return `<span class="sc ${scoreClass(value)}${quick ? " quick" : ""}${low ? " low" : ""}" title="${esc(tip + note + (low ? " Low confidence: little data." : ""))}">${value ?? "—"}</span>`;
+  const tip = c.tips?.[kind] || (kind === "fit" ? `Fit ${value}` : `Audience quality ${value}`);
+  return `<span class="sc ${scoreClass(value)}${quick ? " quick" : ""}${low ? " low" : ""}" data-tip="${esc(tip)}">${value ?? "—"}</span>`;
 }
 
 function badges(c) {
@@ -558,7 +584,7 @@ function badges(c) {
 
 function rowHtml(c, i) {
   const starred = c.status && c.status !== "hidden";
-  const market = [c.country, c.language].filter(Boolean).join(" · ") || "—";
+  const market = S.meta.markets[c.country]?.name || c.country || (c.language ? `${S.meta.languages[c.language] || c.language}-speaking` : "") || "—";
   return `<tr data-id="${esc(c.id)}" data-i="${i}" class="${i === S.cursor ? "cur" : ""} ${S.selected.has(c.id) ? "sel" : ""} ${S.panelId === c.id ? "open" : ""}">
     <td class="c-sel"><input type="checkbox" data-select="${esc(c.id)}" ${S.selected.has(c.id) ? "checked" : ""} aria-label="Select ${esc(c.name)}"></td>
     <td class="c-who"><div class="who">${avatar(c.avatar, c.name)}
@@ -567,9 +593,8 @@ function rowHtml(c, i) {
     <td class="num">${scoreHtml(c.fit, c, "fit")}</td>
     <td class="num">${scoreHtml(c.quality, c, "quality")}</td>
     <td class="num">${fmtNum(c.followers)}</td>
-    <td class="num" title="Median views per post${c.views_window ? `, ${esc(c.views_window)}` : ""}">${fmtNum(c.median_views ?? c.avg_views)}</td>
-    <td class="num">${trendHtml(c.views_trend)}</td>
-    <td class="c-mkt">${esc(market)}</td>
+    <td class="num" title="Median views per post${c.views_window ? `, ${esc(c.views_window)}` : ""}; trend = last 30 days vs the 60 before">${fmtNum(c.median_views ?? c.avg_views)} <small class="trend">${trendHtml(c.views_trend)}</small></td>
+    <td class="c-mkt" title="${esc(S.meta.languages[c.language] || "")}">${esc(market)}</td>
     <td class="c-icon">${c.has_email ? `<span class="mail" title="${esc(c.email || "Has email")}">${ICONS.mail}</span>` : ""}</td>
     <td class="c-icon"><button class="star ${starred ? "on" : ""}" data-star="${esc(c.id)}" title="${starred ? "On shortlist" : "Add to shortlist"} (s)" aria-label="Shortlist">${starred ? ICONS.starOn : ICONS.star}</button></td>
   </tr>`;
@@ -631,15 +656,16 @@ function renderResults(data) {
   } else {
     grid.className = "";
     const all = data.items.length && data.items.every((c) => S.selected.has(c.id));
-    grid.innerHTML = `<div class="table-wrap"><table class="list">
+    grid.innerHTML = `<p class="legend"><span><b>Fit</b>: how well they suit ${esc(S.company.name)}</span><span><b>Quality</b>: are their viewers real and engaged</span>
+      <span><span class="sc quick">00</span> dashed = quick estimate, not yet read by AI</span><span>Hover a score to see why · click a creator for details</span></p>
+      <div class="table-wrap"><table class="list">
       <thead><tr>
         <th class="c-sel"><input type="checkbox" id="sel-all" ${all ? "checked" : ""} aria-label="Select all on this page"></th>
         <th>Creator</th>
         <th class="num" title="Would a marketer pick them for this brand? Content, audience, market, brand and readiness.">Fit</th>
         <th class="num" title="Is the audience real and paying attention? Authenticity, engagement, consistency, activity, momentum.">Quality</th>
         <th class="num">Followers</th>
-        <th class="num" title="Median views per post, last 30 days">Views</th>
-        <th class="num" title="Views in the last 30 days vs the 60 before">Trend</th>
+        <th class="num" title="Median views per post in the last 30 days, and the trend">Typical views</th>
         <th>Market</th>
         <th class="c-icon" title="Has a public email">${ICONS.mail}</th>
         <th class="c-icon"></th>
@@ -730,7 +756,7 @@ function moveCursor(delta) {
   if (!S.rows.length) return;
   S.cursor = Math.max(0, Math.min(S.rows.length - 1, (S.cursor < 0 ? (delta > 0 ? -1 : 0) : S.cursor) + delta));
   markCursor();
-  if (S.panelId) openPanel(S.rows[S.cursor].id);
+  if (S.panelId) openDetail(S.rows[S.cursor].id);
 }
 
 function markCursor() {
@@ -745,7 +771,7 @@ async function toggleStar(id) {
     await setStatus(id, on ? null : "shortlisted");
     toast(on ? "Removed from shortlist" : "Added to shortlist", on ? "" : "ok");
     if (S.view === "shortlist") renderShortlist(); else loadCreators({ quiet: true });
-    if (S.panelId === id) openPanel(id);
+    if (S.panelId === id) openDetail(id);
   } catch (err) { toast(err.message, "err"); }
 }
 
@@ -757,7 +783,7 @@ async function hideCreator(id, reason) {
     await loadCreators({ quiet: true });
     if (S.panelId === id) {
       const next = S.rows[Math.min(i, S.rows.length - 1)];
-      if (next) { S.cursor = S.rows.indexOf(next); markCursor(); openPanel(next.id); } else closePanel();
+      if (next) { S.cursor = S.rows.indexOf(next); markCursor(); openDetail(next.id); } else closeDetail();
     }
   } catch (err) { toast(err.message, "err"); }
 }
@@ -767,29 +793,33 @@ async function setStatus(id, status, reason = "") {
   updateShortlistCount();
 }
 
-// ---------- Creator panel ----------
-async function openPanel(id) {
+// ---------- Creator details ----------
+// A centered window: a short summary first, everything else in sections that open on demand.
+async function openDetail(id) {
   S.panelId = id;
-  const panel = $("#panel");
-  panel.hidden = false;
-  document.body.classList.add("with-panel");
+  const dlg = $("#detail");
+  if (!dlg.open) dlg.showModal();
   $$("#grid [data-id]").forEach((el) => el.classList.toggle("open", el.dataset.id === id));
-  if (!S.panelData || S.panelData.card.id !== id) panel.innerHTML = `<div class="loading-line" style="padding:32px"><span class="spinner"></span>Loading…</div>`;
+  if (!S.panelData || S.panelData.card.id !== id) dlg.innerHTML = `<div class="loading-line" style="padding:40px"><span class="spinner"></span>Loading…</div>`;
   try {
     const d = await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(id)}`);
     if (S.panelId !== id) return; // moved on meanwhile
-    renderPanel(d);
+    renderDetail(d);
   } catch (e) {
-    closePanel();
+    closeDetail();
     toast(e.message, "err");
   }
 }
 
-function closePanel() {
+function closeDetail() {
+  const dlg = $("#detail");
+  if (dlg.open) dlg.close(); // the close event does the rest
+  else detailClosed();
+}
+
+function detailClosed() {
   S.panelId = null;
   S.panelData = null;
-  $("#panel").hidden = true;
-  document.body.classList.remove("with-panel");
   $$("#grid [data-id].open").forEach((el) => el.classList.remove("open"));
 }
 
@@ -804,7 +834,26 @@ function barHtml(value) {
   return `<div class="track"><i class="${scoreClass(value)}" style="width:${value}%"></i></div>`;
 }
 
-function renderPanel(d) {
+const fitWord = (s) => (s >= 85 ? "Excellent fit" : s >= 75 ? "Strong fit" : s >= 55 ? "Possible fit" : "Weak fit");
+const qualityWord = (s) => (s >= 85 ? "Excellent audience" : s >= 75 ? "Healthy audience" : s >= 55 ? "Mixed audience" : "Doubtful audience");
+const DIM_ORDER = ["content", "audience", "market", "readiness", "brand"];
+
+// Sections the user keeps open stay open for the next creator.
+function openSections() {
+  try { return new Set(JSON.parse(localStorage.getItem("scout.open") || "[]")); } catch { return new Set(); }
+}
+function rememberSection(el) {
+  const open = openSections();
+  el.open ? open.add(el.dataset.sec) : open.delete(el.dataset.sec);
+  try { localStorage.setItem("scout.open", JSON.stringify([...open])); } catch { /* storage blocked */ }
+}
+function section(key, title, hint, body, open) {
+  return `<details class="sec" data-sec="${key}" ${open.has(key) ? "open" : ""}>
+    <summary><span class="sec-title">${title}</span><span class="sec-hint">${hint}</span>${ICONS.chev}</summary>
+    <div class="sec-body">${body}</div></details>`;
+}
+
+function renderDetail(d) {
   S.panelData = d;
   const { card: c, creator: cr, match: m, linked = [], partner, agency } = d;
   const lang = S.meta.languages[m.language] || m.language || "";
@@ -814,101 +863,129 @@ function renderPanel(d) {
   const aud = cr.audience || {};
   const conf = m.confidence || { level: "low", notes: [] };
   const ev = m.evidence || [];
-  const posts = (cr.recent_posts || []).slice(0, 6);
+  const posts = (cr.recent_posts || []).slice(0, 8);
+  const open = openSections();
+  const platform = S.meta.platforms[c.platform];
   S.pitch = m.pitch;
   const i = S.rows.findIndex((r) => r.id === c.id);
+
+  // The summary: the strongest reasons for, the concerns, and what hasn't been checked yet.
+  const x = d.explain || { parts: {}, qparts: {} };
+  const qn = Object.values(d.quality_notes || {});
+  const pros = ev.filter((e) => e.sign !== "-")
+    .sort((a, b) => (b.src === "ai") - (a.src === "ai") || DIM_ORDER.indexOf(a.dim) - DIM_ORDER.indexOf(b.dim))
+    .map((e) => e.text).concat(qn.filter((n) => n.sign === "+").map((n) => n.text)).slice(0, 3);
+  const cons = ev.filter((e) => e.sign === "-").map((e) => e.text)
+    .concat(qn.filter((n) => n.sign === "-").map((n) => n.text)).slice(0, 4);
+  const unchecked = conf.notes.slice(0, cons.length ? 1 : 2);  // no concerns found can also mean: not looked yet
+  const firstEmail = cr.emails?.[0];
 
   const dims = Object.entries(S.meta.fit_parts).map(([k, label]) => {
     const v = m.fit_parts?.[k] ?? 0;
     const claims = ev.filter((e) => e.dim === k);
-    return `<div class="dim"><div class="dim-head"><span>${esc(label)}</span>${barHtml(v)}<b>${v}</b></div>
-      ${claims.length ? `<ul class="claims">${claims.map(claimHtml).join("")}</ul>` : ""}</div>`;
+    return `<div class="dim"><div class="dim-head" data-tip="${esc(`${label} · ${v}\n${x.parts[k] || ""}`)}"><span>${esc(label)}</span>${barHtml(v)}<b>${v}</b></div>
+      ${claims.length ? `<ul class="claims">${claims.map(claimHtml).join("")}</ul>` : `<p class="muted small">No specific evidence either way.</p>`}</div>`;
   }).join("");
-
   const qparts = Object.entries(S.meta.quality_parts).map(([k, label]) => {
     const v = m.quality_parts?.[k] ?? 0;
-    return `<div class="qpart"><span>${esc(label)}</span>${barHtml(v)}<b>${v}</b></div>`;
+    return `<div class="qpart" data-tip="${esc(`${label} · ${v}\n${x.qparts[k] || ""}`)}"><span>${esc(label)}</span>${barHtml(v)}<b>${v}</b></div>`;
   }).join("");
-  const signals = (auth.signals || []).map((s) => `<li class="${s.kind === "good" ? "plus" : "minus"}"><span class="sign">${s.kind === "good" ? "✓" : "!"}</span><div>${esc(s.text)}</div></li>`).join("");
+  const signals = (auth.signals || []).map((x) => `<li class="${x.kind === "good" ? "plus" : "minus"}"><span class="sign">${x.kind === "good" ? "✓" : "!"}</span><div>${esc(x.text)}</div></li>`).join("");
   const langs = Object.entries(aud.languages || {}).map(([k, v]) => `${esc(S.meta.languages[k] || k)} ${Math.round(v * 100)}%`).join(" · ");
-  const consistency = cr.consistency != null ? `${Math.round(cr.consistency * 100)}% of recent posts reach at least half their average views${cr.views_spread >= 2 ? " (the average is carried by a few hits)" : ""}` : "";
+  const consistency = cr.consistency != null ? `${Math.round(cr.consistency * 100)}% of recent posts reach at least half their average views${cr.views_spread >= 2 ? " (the average is carried by a few hits)" : ""}.` : "";
+  const warnings = (auth.signals || []).filter((x) => x.kind !== "good").length;
 
-  $("#panel").innerHTML = `
-    <div class="p-head">
-      ${avatar(c.avatar, c.name)}
-      <div class="p-title">
-        <h2>${esc(c.name)}</h2>
-        <div class="p-sub"><span class="plat plat-${c.platform}">${ICONS[c.platform]}</span><a href="${esc(cr.url)}" target="_blank" rel="noopener">${esc(cr.handle || S.meta.platforms[c.platform])}</a>
-          ${country ? `<span>${esc(country)}</span>` : ""}${lang ? `<span>${esc(lang)}</span>` : ""}<span>${fmtNum(cr.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}</span></div>
-        <div class="p-badges">${badges(c)}${partner ? `<span class="tag partner">Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? '<span class="tag">Hidden</span>' : ""}</div>
+  $("#detail").innerHTML = `
+    <div class="d-top">
+      <div class="d-head">
+        ${avatar(c.avatar, c.name)}
+        <div class="d-title">
+          <h2>${esc(c.name)}</h2>
+          <div class="d-sub"><span class="plat plat-${c.platform}">${ICONS[c.platform]}</span><a href="${esc(cr.url)}" target="_blank" rel="noopener">${esc(cr.handle || platform)}</a>
+            <span>${fmtNum(cr.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}</span>${country ? `<span>${esc(country)}</span>` : ""}${lang ? `<span>${esc(lang)}</span>` : ""}</div>
+          <div class="d-badges">${badges(c)}${partner ? `<span class="tag partner">Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? '<span class="tag">Hidden</span>' : ""}</div>
+        </div>
+        <div class="d-nav">
+          <button class="icon-btn small" data-act="panel-prev" ${i <= 0 ? "disabled" : ""} title="Previous creator (↑)">${ICONS.up}</button>
+          <button class="icon-btn small" data-act="panel-next" ${i < 0 || i >= S.rows.length - 1 ? "disabled" : ""} title="Next creator (↓)">${ICONS.down}</button>
+          <button class="icon-btn small" data-act="panel-close" title="Close (Esc)">${ICONS.x}</button>
+        </div>
       </div>
-      <div class="p-nav">
-        <button class="icon-btn small" data-act="panel-prev" ${i <= 0 ? "disabled" : ""} title="Previous (↑)">${ICONS.up}</button>
-        <button class="icon-btn small" data-act="panel-next" ${i < 0 || i >= S.rows.length - 1 ? "disabled" : ""} title="Next (↓)">${ICONS.down}</button>
-        <button class="icon-btn small" data-act="panel-close" title="Close (Esc)">${ICONS.x}</button>
+      <div class="p-actions">
+        <button class="btn ${starred ? "dark" : "primary"}" data-act="panel-star">${starred ? ICONS.starOn + " On shortlist" : ICONS.star + " Add to shortlist"}</button>
+        ${m.status === "hidden" ? `<button class="btn" data-act="panel-unhide">Unhide</button>` : `<button class="btn" data-act="panel-hide">Not a fit ${ICONS.chev}</button>`}
+        <a class="btn" href="${esc(cr.url)}" target="_blank" rel="noopener">${ICONS.ext} Open on ${esc(platform)}</a>
+        <span class="spacer"></span>
+        ${S.meta.sources.ai ? `<button class="btn ${m.checked === "deep" ? "" : "accent"}" data-act="deep" title="Reads their posts, descriptions and viewer comments, and judges fit like a marketer would (uses the writing AI, about a minute)">${ICONS.sparkle} ${m.checked === "deep" ? "Evaluate again" : "Deep evaluation"}</button>` : ""}
       </div>
     </div>
-    <div class="p-actions">
-      <button class="btn small ${starred ? "dark" : "primary"}" data-act="panel-star">${starred ? ICONS.starOn + " On shortlist" : ICONS.star + " Shortlist"}</button>
-      ${m.status === "hidden" ? `<button class="btn small" data-act="panel-unhide">Unhide</button>` : `<button class="btn small" data-act="panel-hide">Not a fit ${ICONS.chev}</button>`}
-      <a class="btn small" href="${esc(cr.url)}" target="_blank" rel="noopener">${ICONS.ext} Profile</a>
-      <span class="spacer"></span>
-      ${S.meta.sources.ai ? `<button class="btn small ${m.checked === "deep" ? "" : "accent"}" data-act="deep" title="Reads their posts, descriptions and viewer comments, and judges fit like a marketer (uses the writing AI)">${ICONS.sparkle} ${m.checked === "deep" ? "Re-evaluate" : "Deep evaluation"}</button>` : ""}
-    </div>
-    <div class="p-body">
-      ${m.verdict ? `<p class="verdict">${esc(m.verdict)}</p>` : `<p class="p-summary">${esc(m.summary)}</p>`}
+
+    <div class="d-body">
+      <p class="d-lead">${esc(m.verdict || m.summary)}</p>
       ${m.audience_note || m.collab_idea ? `<dl class="deep-notes">
         ${m.audience_note ? `<dt>Audience</dt><dd>${esc(m.audience_note)}</dd>` : ""}
         ${m.collab_idea ? `<dt>Idea</dt><dd>${esc(m.collab_idea)}</dd>` : ""}
         ${m.deep?.sponsors_seen?.length ? `<dt>Sponsors</dt><dd>${esc(m.deep.sponsors_seen.join(", "))}</dd>` : ""}</dl>` : ""}
 
-      <div class="scores">
-        <div class="scorebox"><b class="${scoreClass(m.fit)}">${m.fit}</b><div><strong>Fit</strong><small>Would a marketer pick them for ${esc(S.company.name)}?</small></div></div>
-        <div class="scorebox"><b class="${scoreClass(m.quality)}">${m.quality}</b><div><strong>Audience quality</strong><small>Is the audience real and paying attention?</small></div></div>
+      <div class="d-scores">
+        <div class="scorecard" data-tip="${esc(x.fit || "")}"><b class="${scoreClass(m.fit)}">${m.fit}</b>
+          <div><strong>${fitWord(m.fit)}</strong><small>How well they suit ${esc(S.company.name)}: content, audience, market, brand and cost.</small></div></div>
+        <div class="scorecard" data-tip="${esc(x.quality || "")}"><b class="${scoreClass(m.quality)}">${m.quality}</b>
+          <div><strong>${qualityWord(m.quality)}</strong><small>Whether their viewers are real, engaged and still growing.</small></div></div>
       </div>
-      <p class="conf conf-${conf.level}"><span class="dotc"></span>Confidence: <b>${esc(conf.level)}</b>${conf.notes.length ? ` · ${esc(conf.notes.join(" · "))}` : ""}
-        ${m.checked === "rules" && S.meta.sources.ai ? ` <button class="btn link" data-act="ai-check">Check with ${esc(S.meta.ai.label)}</button>` : ""}</p>
 
-      <section><h4>Why this fit <span class="muted">· evidence from their posts and comments</span></h4>${dims}</section>
+      <div class="glance">
+        <div data-tip="${esc(x.qparts.consistency || "")}"><span>Typical views</span><b>${fmtNum(cr.median_views ?? cr.avg_views)}</b></div>
+        <div data-tip="${esc(`${pct(cr.engagement_rate)} of viewers like or comment\n${x.qparts.engagement || ""}`)}"><span>Engagement vs typical</span><b>${cr.engagement_vs_typical ? `${cr.engagement_vs_typical}×` : pct(cr.engagement_rate)}</b></div>
+        <div data-tip="${esc(x.qparts.momentum || "")}"><span>Views trend</span><b>${trendHtml(cr.views_trend)}</b></div>
+        <div data-tip="Rough estimate: typical views × common rates per 1,000 views. Check with the creator."><span>Est. price / post</span><b>${euro(cr.price)}</b></div>
+      </div>
 
-      <section><h4>Audience quality</h4>
-        <div class="qparts">${qparts}</div>
-        ${signals ? `<ul class="claims signals">${signals}</ul>` : `<p class="muted small">No warning signs in the numbers we have.</p>`}
-        ${langs ? `<p class="small">Comment languages (${aud.sampled} sampled): ${langs}</p>` : ""}
-        ${consistency ? `<p class="small">${esc(consistency)}</p>` : ""}
-      </section>
+      <div class="procon">
+        <div><h5>Why they could work</h5>
+          ${pros.length ? `<ul>${pros.map((t) => `<li class="plus">${esc(t)}</li>`).join("")}</ul>` : `<p class="muted small">Nothing stands out yet.</p>`}</div>
+        <div><h5>Watch out</h5>
+          ${cons.length || unchecked.length ? `<ul>${cons.map((t) => `<li class="minus">${esc(t)}</li>`).join("")}${unchecked.map((t) => `<li class="unknown">Not checked yet: ${esc(t[0].toLowerCase() + t.slice(1))}</li>`).join("")}</ul>`
+            : `<p class="muted small">Nothing worrying found in their posts, comments or numbers.</p>`}</div>
+      </div>
 
-      <section><h4>Numbers</h4>
-        <div class="nums">
-          <div><b>${fmtNum(cr.median_views ?? cr.avg_views)}</b><span>median views${cr.views_window ? ` · ${esc(cr.views_window)}` : ""}</span></div>
-          <div><b>${pct(cr.engagement_rate)}</b><span>engagement${cr.engagement_vs_typical ? ` · ${cr.engagement_vs_typical}× typical` : ""}</span></div>
-          <div><b>${trendHtml(cr.views_trend)}</b><span>views trend</span></div>
-          <div><b>${cr.posts_per_month ?? "—"}</b><span>posts / month · last post ${daysAgo(cr.days_since_last_post)}</span></div>
-          <div><b>${euro(cr.price)}</b><span>est. price per post</span></div>
-          <div><b>${fmtNum(cr.avg_views)}</b><span>average views</span></div>
-        </div>
-        ${linked.length ? `<div class="also">${linked.map((o) => `<a href="${esc(o.url)}" target="_blank" rel="noopener">${ICONS[o.platform]} Also on ${esc(S.meta.platforms[o.platform])}: ${fmtNum(o.followers)}${o.avg_views != null ? ` · ${fmtNum(o.avg_views)} views` : ""}</a>`).join("")}</div>` : ""}
-      </section>
+      <div class="contact-line">${ICONS.mail}
+        ${firstEmail ? `<code>${esc(firstEmail)}</code><button class="btn small" data-act="copy" data-text="${esc(firstEmail)}">${ICONS.copy} Copy</button>`
+          : `<span class="muted">No public email. Message them on ${esc(platform)}.</span>`}
+        ${agency ? `<span class="tag" title="A company email that isn't the creator's own, or management mentioned in their bio">Likely via agency</span>` : ""}
+        ${Object.entries(cr.socials || {}).map(([k, l]) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS[k] || ICONS.ext} ${esc(k[0].toUpperCase() + k.slice(1))}</a>`).join("")}
+      </div>
 
-      ${posts.length ? `<section><h4>Recent posts</h4><ul class="postlist">
-        ${posts.map((p, k) => `<li><a href="${esc(p.url || cr.url)}" target="_blank" rel="noopener"><span class="pref">p${k + 1}</span><span class="ptitle">${esc(p.title || "(no title)")}</span>
-          <span class="pviews">${p.views != null ? fmtNum(p.views) + " views" : fmtNum(p.likes) + " likes"}</span></a></li>`).join("")}</ul></section>` : ""}
+      <p class="conf conf-${conf.level}"><span class="dotc"></span>How sure we are: <b>${esc(conf.level)}</b>${conf.notes.length ? ` · ${esc(conf.notes.join(" · "))}` : ""}
+        ${m.checked === "rules" && S.meta.sources.ai ? ` <button class="btn link" data-act="ai-check">Let ${esc(S.meta.ai.label)} read their posts</button>` : ""}</p>
 
-      <section><h4>Contact</h4>
-        <div class="contact">
-          ${cr.emails?.length ? cr.emails.map((e) => `<code>${esc(e)}</code><button class="btn small" data-act="copy" data-text="${esc(e)}">${ICONS.copy} Copy</button>`).join("")
-            : `<span class="muted small">No public email. Message them on ${esc(S.meta.platforms[c.platform])}${cr.links?.length ? " or via their link" : ""}.</span>`}
-          ${agency ? `<span class="tag" title="A company email that isn't the creator's own, or management mentioned in their bio">Likely via agency</span>` : ""}
-          ${Object.entries(cr.socials || {}).map(([k, l]) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS[k] || ICONS.ext} ${esc(k[0].toUpperCase() + k.slice(1))}</a>`).join("")}
-        </div>
-      </section>
-
-      <section><h4>Outreach</h4>
-        <div id="pitch-area">${m.pitch ? pitchHtml(m.pitch, cr) : `<button class="btn small" data-act="pitch">${ICONS.mail} Draft a message in ${esc(lang || "their language")}</button>`}</div>
-      </section>
+      <div class="sections">
+        ${section("fit", "Fit in detail", `${ev.length} pieces of evidence from their posts and comments`, dims, open)}
+        ${section("quality", "Audience quality in detail", warnings ? `${warnings} warning sign${warnings > 1 ? "s" : ""}` : "no warning signs", `
+          <div class="qparts">${qparts}</div>
+          ${signals ? `<ul class="claims signals">${signals}</ul>` : `<p class="muted small">No warning signs in the numbers we have.</p>`}
+          ${langs ? `<p class="small">Comment languages (${aud.sampled} sampled): ${langs}</p>` : ""}
+          ${consistency ? `<p class="small">${esc(consistency)}</p>` : ""}`, open)}
+        ${section("numbers", "All numbers", `posts ${cr.posts_per_month ?? "—"} times a month`, `
+          <div class="nums">
+            <div><b>${fmtNum(cr.median_views ?? cr.avg_views)}</b><span>median views${cr.views_window ? ` · ${esc(cr.views_window)}` : ""}</span></div>
+            <div><b>${fmtNum(cr.avg_views)}</b><span>average views</span></div>
+            <div><b>${pct(cr.engagement_rate)}</b><span>engagement${cr.engagement_vs_typical ? ` · ${cr.engagement_vs_typical}× typical` : ""}</span></div>
+            <div><b>${trendHtml(cr.views_trend)}</b><span>views, last 30 days vs the 60 before</span></div>
+            <div><b>${cr.posts_per_month ?? "—"}</b><span>posts a month · last post ${daysAgo(cr.days_since_last_post)}</span></div>
+            <div><b>${euro(cr.price)}</b><span>estimated price per post</span></div>
+          </div>
+          ${linked.length ? `<div class="also">${linked.map((o) => `<a href="${esc(o.url)}" target="_blank" rel="noopener">${ICONS[o.platform]} Also on ${esc(S.meta.platforms[o.platform])}: ${fmtNum(o.followers)}${o.avg_views != null ? ` · ${fmtNum(o.avg_views)} views` : ""}</a>`).join("")}</div>` : ""}`, open)}
+        ${posts.length ? section("posts", "Recent posts", `${posts.length} latest`, `<ul class="postlist">
+          ${posts.map((p, k) => `<li><a href="${esc(p.url || cr.url)}" target="_blank" rel="noopener"><span class="pref">p${k + 1}</span><span class="ptitle">${esc(p.title || "(no title)")}</span>
+            <span class="pviews">${p.views != null ? fmtNum(p.views) + " views" : fmtNum(p.likes) + " likes"}</span></a></li>`).join("")}</ul>`, open) : ""}
+        ${section("outreach", "First message", m.pitch ? "drafted" : `drafted by AI in ${esc(lang || "their language")}`,
+          `<div id="pitch-area">${m.pitch ? pitchHtml(m.pitch, cr) : `<button class="btn" data-act="pitch">${ICONS.mail} Draft a message in ${esc(lang || "their language")}</button>`}</div>`, open)}
+      </div>
 
       ${cr.found_via?.length ? `<p class="via">Found via ${cr.found_via.map(esc).join(" · ")}</p>` : ""}
     </div>`;
+  $$("#detail details.sec").forEach((el) => el.addEventListener("toggle", () => rememberSection(el)));
 }
 
 function pitchHtml(p, cr) {
@@ -949,7 +1026,7 @@ async function rescoreOne(kind, btn) {
     : `<span class="spinner"></span> ${esc(S.meta.ai.label)} is reading their posts…`;
   try {
     await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(id)}/${kind === "deep" ? "deep" : "ai-check"}`, { method: "POST" });
-    if (S.panelId === id) await openPanel(id);
+    if (S.panelId === id) await openDetail(id);
     loadCreators({ quiet: true });
     if (kind === "deep") toast("Deep evaluation done", "ok");
   } catch (err) {
@@ -1317,7 +1394,7 @@ async function renderShortlist() {
 // ---------- Views ----------
 function showView(view) {
   S.view = view;
-  closePanel();
+  closeDetail();
   $$(".tab").forEach((t) => t.classList.toggle("on", t.dataset.view === view));
   $("#view-discover").hidden = view !== "discover";
   $("#view-shortlist").hidden = view !== "shortlist";
@@ -1377,24 +1454,38 @@ function bindEvents() {
       $("#tag-add-btn").click();
       return;
     }
-    if ($("dialog[open]")) return;
+    const dialog = $("dialog[open]");
+    if (dialog && dialog.id !== "detail") return;
     if (e.key === "Escape") {
-      if ($$(".pop:not([hidden]), .menu-pop").length) closePops();
-      else if (S.panelId) closePanel();
-      return;
+      if ($$(".pop:not([hidden]), .menu-pop").length) { e.preventDefault(); closePops(); }
+      return; // otherwise the details window closes itself
     }
     if (typing() || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (dialog) {  // details window: ↑/↓ walk through the list, s shortlists, h = not a fit
+      if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); moveCursor(1); }
+      else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); moveCursor(-1); }
+      else if (e.key === "s" && S.panelId) toggleStar(S.panelId);
+      else if (e.key === "h" && S.panelId) { const b = $('[data-act="panel-hide"]'); if (b) reasonMenu(b, (r) => hideCreator(S.panelId, r)); }
+      return;
+    }
     if (e.key === "/") { e.preventDefault(); $("#q").focus(); return; }
     const c = S.rows[S.cursor];
     if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); moveCursor(1); }
     else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); moveCursor(-1); }
-    else if ((e.key === "Enter" || e.key === "o") && c) { e.preventDefault(); openPanel(c.id); }
+    else if ((e.key === "Enter" || e.key === "o") && c) { e.preventDefault(); openDetail(c.id); }
     else if (e.key === "s" && c) toggleStar(c.id);
     else if (e.key === "x" && c && S.view === "discover") toggleSelect(c.id);
     else if (e.key === "h" && c && S.view === "discover") {
-      openPanel(c.id).then(() => { const b = $('[data-act="panel-hide"]'); if (b) reasonMenu(b, (r) => hideCreator(c.id, r)); });
+      openDetail(c.id).then(() => { const b = $('[data-act="panel-hide"]'); if (b) reasonMenu(b, (r) => hideCreator(c.id, r)); });
     }
   });
+
+  document.addEventListener("mouseover", (e) => {
+    const el = e.target.closest?.("[data-tip]");
+    if (el && el.dataset.tip) showTip(el); else hideTip();
+  });
+  document.addEventListener("scroll", hideTip, true);
+  document.addEventListener("click", hideTip, true);
 
   // Images that fail to load become initials
   document.addEventListener("error", (e) => {
@@ -1478,7 +1569,7 @@ function bindEvents() {
     if (row && !e.target.closest("[data-select], .c-sel, a, select, button")) {
       S.cursor = S.rows.findIndex((c) => c.id === row.dataset.id);
       markCursor();
-      openPanel(row.dataset.id);
+      openDetail(row.dataset.id);
       return;
     }
 
@@ -1530,12 +1621,12 @@ function bindEvents() {
     else if (act === "bulk-shortlist") bulkStatus("shortlisted");
     else if (act === "bulk-hide-menu") reasonMenu(actEl, (r) => bulkStatus("hidden", r));
     else if (act === "bulk-clear") { S.selected.clear(); renderBulk(); loadCreators({ quiet: true }); }
-    else if (act === "panel-close") closePanel();
+    else if (act === "panel-close") closeDetail();
     else if (act === "panel-prev") moveCursor(-1);
     else if (act === "panel-next") moveCursor(1);
     else if (act === "panel-star") toggleStar(S.panelId);
     else if (act === "panel-hide") { const id = S.panelId; reasonMenu(actEl, (r) => hideCreator(id, r)); }
-    else if (act === "panel-unhide") { await setStatus(S.panelId, null); toast("Visible again"); openPanel(S.panelId); loadCreators({ quiet: true }); }
+    else if (act === "panel-unhide") { await setStatus(S.panelId, null); toast("Visible again"); openDetail(S.panelId); loadCreators({ quiet: true }); }
     else if (act === "deep") rescoreOne("deep", actEl);
     else if (act === "ai-check") rescoreOne("ai", actEl);
     else if (act === "pitch") draftPitch();
@@ -1551,6 +1642,13 @@ function bindEvents() {
 
   // Dialogs close on a backdrop click
   $$("dialog").forEach((d) => d.addEventListener("click", (e) => { if (e.target === d) d.close(); }));
+  $("#detail").addEventListener("close", () => {
+    detailClosed();
+    if (S.view === "shortlist") renderShortlist(); else loadCreators({ quiet: true });
+  });
+  $("#detail").addEventListener("cancel", (e) => {  // Esc with a menu open closes just the menu
+    if ($(".menu-pop")) { e.preventDefault(); closePops(); }
+  });
 }
 
 // ---------- Boot ----------

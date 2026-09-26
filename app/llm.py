@@ -538,6 +538,7 @@ Score each creator from 0 to 100 on:
 - brand_fit: whether their tone and values suit the brand and would make its message believable. Lower it for anything on the brand's "never work with" list.
 - readiness: how ready they are for a collaboration: contact details, experience with sponsored posts or codes (but not so many ads that viewers tune out), posting regularly, a format where a sponsored segment fits naturally, and a likely price within the brand's budget.
 - brand_safety: 100 = nothing concerning. Subtract for gambling or skin betting, hate, adult content, misinformation, or heavy controversy.
+Use the whole range. Most real creators have some weakness: reserve 90+ for strong evidence you can cite, and give 100 only when there is truly nothing to improve.
 
 Also return:
 - language: ISO 639-1 code of the language they mostly post in. country: ISO 3166-1 alpha-2 code of where they are based, or "".
@@ -763,7 +764,8 @@ Return:
 - collab_idea: one concrete collaboration idea that would feel natural for this creator and this brand.
 - sponsors_seen: brand names they have promoted recently (empty if none).
 - summary, niche, games, tags: as usual.
-- evidence: 4 to 8 claims (dim, sign, claim, posts, comments), each citing the refs (p1.., c1..) that show it. Never cite refs that don't exist.
+- evidence: 4 to 8 claims (dim, sign, claim, posts, comments), each citing the refs (p1.., c1..) that show it. Never cite refs that don't exist. Include the weaknesses too: a score below 100 should have a "-" claim that says why.
+Use the whole 0-100 range: reserve 90+ for strong evidence, and give 100 only when there is truly nothing to improve.
 - competitor_sponsor: true only if sponsored by one of the brand's competitors.
 Judge only from the data provided and never invent facts."""
 

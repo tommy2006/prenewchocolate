@@ -129,8 +129,16 @@ def analyze_comments(comments: list[dict]) -> dict | None:
 
 # --- Authenticity -----------------------------------------------------------------------------
 
-def _signal(kind: str, text: str, penalty: int = 0) -> dict:
-    return {"kind": kind, "text": text, "penalty": penalty}
+VERSION = 2  # bump when the assessment changes, so saved creators are re-assessed on start
+
+# Authenticity starts neutral: "nothing suspicious found" is not proof of a real audience. Positive evidence
+# raises it, warning signs lower it, and with little data it can't get high at all.
+NEUTRAL = 70
+CAP = {"low": 75, "medium": 90, "high": 100}
+
+
+def _signal(kind: str, text: str, penalty: int = 0, bonus: int = 0) -> dict:
+    return {"kind": kind, "text": text, "penalty": penalty, "bonus": bonus}
 
 
 def authenticity(c: dict) -> dict:
@@ -148,7 +156,7 @@ def authenticity(c: dict) -> dict:
         elif ratio < 0.5:
             signals.append(_signal("warn", f"Fewer followers than usual watch: {reach:.0%} per post vs about {typical:.0%} typical.", 12))
         elif ratio >= 1.5:
-            signals.append(_signal("good", f"{reach:.0%} of followers watch a typical post, well above the {typical:.0%} typical for their size."))
+            signals.append(_signal("good", f"{reach:.0%} of followers watch a typical post, well above the {typical:.0%} typical for their size.", bonus=10))
     rate = c.get("engagement_rate")
     if rate is not None and tier and platform in TYPICAL_RATE:
         typical = TYPICAL_RATE[platform][tier]
@@ -173,14 +181,15 @@ def authenticity(c: dict) -> dict:
             signals.append(_signal("warn", f"{a['spam_share']:.0%} of comments are spam (links, \"sub4sub\").", 10))
         if a["question_share"] >= 0.12:
             signals.append(_signal("good", f"Viewers ask them questions ({a['question_share']:.0%} of comments)"
-                                           + (", including for buying advice." if a.get("advice_share", 0) >= 0.03 else ".")))
+                                           + (", including for buying advice." if a.get("advice_share", 0) >= 0.03 else "."), bonus=5))
         if a["generic_share"] < 0.25 and a["duplicate_share"] < 0.05:
-            signals.append(_signal("good", "Comments are real conversation, not emoji or copy-paste."))
+            signals.append(_signal("good", "Comments are real conversation, not emoji or copy-paste.", bonus=10))
 
-    score = max(0, 100 - sum(s["penalty"] for s in signals))
     with_likes = sum(1 for p in c.get("recent_posts", []) if isinstance(p.get("likes"), (int, float)))
     points = (2 if n >= 30 else 1 if n >= 10 else 0) + (1 if with_likes >= 5 else 0) + (1 if reach is not None else 0)
     confidence = "high" if points >= 3 else "medium" if points >= 2 else "low"
+    score = NEUTRAL + sum(s["bonus"] for s in signals) - sum(s["penalty"] for s in signals)
+    score = max(0, min(CAP[confidence], score))
     return {"score": score, "signals": signals, "confidence": confidence}
 
 
@@ -239,4 +248,5 @@ def assess(c: dict) -> dict:
     c["authenticity"] = authenticity(c)
     c["sponsorship"] = sponsorship(c)
     c["price"] = price_estimate(c)
+    c["assessed_v"] = VERSION
     return c

@@ -93,6 +93,7 @@ def build_match(creator: dict, r: dict, job_id: str, markets: list[str] | None, 
         "checked": checked,  # rules | ai | deep
         "status": None,
         "pitch": None,
+        "v": scoring.VERSION,
         "job_id": job_id,
         "search_markets": markets or [],  # markets the search targeted; used when the country is unknown
         "created_at": now_iso(),
@@ -529,17 +530,22 @@ def upgrade_library() -> None:
     current model, keeping every AI judgement already made (no AI calls, no quota)."""
     changed = False
     for c in store.creators.values():
-        if "median_views" not in c or "authenticity" not in c:
+        if c.get("assessed_v") != audience.VERSION:
             metrics.compute_stats(c)
             audience.assess(c)
             changed = True
+    stale = set()
     for company_id, matches in store.matches.items():
         company = store.companies.get(company_id)
         if not company:
             continue
         for cid, m in list(matches.items()):
             c = store.creators.get(cid)
-            if not c or "fit" in m:
+            if not c:
+                continue
+            if "fit" in m:
+                if m.get("v") != scoring.VERSION:
+                    stale.add(company_id)
                 continue
             quick = rules.quick_score(c, company, search_of(m))
             if m.get("ai_checked"):
@@ -552,6 +558,8 @@ def upgrade_library() -> None:
                 quick = merge_ai(quick, old)
             matches[cid] = rebuild(m, c, company, quick)
             changed = True
+    for company_id in stale:  # scored by an older model: recompute from the saved judgements
+        rescore_company(store.companies[company_id])
     if changed:
         store.save()
 

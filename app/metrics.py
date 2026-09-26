@@ -183,12 +183,15 @@ def compute_stats(creator: dict) -> dict:
     creator["avg_comments"] = round(avg_comments) if avg_comments is not None else None
     creator["median_views"] = round(median_views) if median_views is not None else None
     # Consistency: share of posts reaching at least half the average. One viral hit among flops scores low.
-    viewed = [p["views"] for p in window if isinstance(p.get("views"), (int, float))]
+    viewed = sorted(p["views"] for p in window if isinstance(p.get("views"), (int, float)))
     if len(viewed) >= 4 and avg_views:
         creator["consistency"] = round(sum(1 for v in viewed if v >= avg_views / 2) / len(viewed), 2)
         creator["views_spread"] = round(avg_views / median_views, 2) if median_views else None
+        # The middle half of their posts: what a sponsored post can expect, without the one viral hit or flop.
+        n = len(viewed)
+        creator["views_range"] = [round(viewed[n // 4]), round(viewed[max(n // 4, (3 * n) // 4 - 1)])]
     else:
-        creator["consistency"] = creator["views_spread"] = None
+        creator["consistency"] = creator["views_spread"] = creator["views_range"] = None
 
     creator["views_trend"] = _trend(basis_posts, now)
     creator["trend"] = trend_label(creator["views_trend"])

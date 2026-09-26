@@ -7,6 +7,8 @@ Two headline numbers instead of one opaque score:
 The overall **match** used for ranking blends the two; the brand's campaign goal decides how.
 Every sub-score comes with evidence (claims that cite posts or comments) and a confidence level.
 """
+import math
+
 
 FIT_PARTS = {
     "content": "Content",
@@ -28,6 +30,9 @@ GOALS = {
     "balanced": {"fit": 0.60, "parts": {"content": 0.35, "audience": 0.25, "market": 0.20, "brand": 0.10, "readiness": 0.10}},
     "awareness": {"fit": 0.50, "parts": {"content": 0.35, "audience": 0.15, "market": 0.25, "brand": 0.10, "readiness": 0.15}},
 }
+
+
+VERSION = 2  # bump when scores are computed differently, so saved matches are re-scored on start
 
 
 def clamp(value, default: int = 0) -> int:
@@ -55,16 +60,29 @@ def fit(parts: dict, goal: str, competitor: bool, safety: int) -> int:
     return clamp(score)
 
 
+def consistency_score(c: dict) -> int:
+    """From the middle half of their posts: 2k-2.5k views is steady (90+), 1k-7k swings a lot (under 20)."""
+    rng = c.get("views_range")
+    if not rng or not rng[0]:
+        return 50
+    return clamp(100 - 30 * math.log2(max(1.0, rng[1] / rng[0])))
+
+
+def momentum_score(trend: float | None) -> int:
+    """Views trend -> 0-100 on a curve: +30% is good (~70), only a doubling gets past 90."""
+    if trend is None:
+        return 50
+    return clamp(50 + 45 * math.tanh(trend / 0.6))
+
+
 def quality_parts(c: dict) -> dict:
     auth = (c.get("authenticity") or {}).get("score")
-    consistency = c.get("consistency")
-    trend = c.get("views_trend")
     return {
         "authenticity": clamp(auth, 60) if auth is not None else 60,
         "engagement": clamp(c.get("engagement_score"), 40),
-        "consistency": clamp(consistency * 100) if consistency is not None else 50,
+        "consistency": consistency_score(c),
         "activity": clamp(c.get("activity_score"), 30),
-        "momentum": clamp(50 + trend * 100) if trend is not None else 50,
+        "momentum": momentum_score(c.get("views_trend")),
     }
 
 
@@ -116,3 +134,100 @@ def evidence_item(dim: str, sign: str, text: str, posts: list[dict] | None = Non
 
 def cite(posts: list[dict], limit: int = 3) -> list[dict]:
     return [{"title": (p.get("title") or "")[:100], "url": p.get("url")} for p in posts[:limit] if p.get("url")]
+
+
+# --- Short explanations (hover texts), about this creator -------------------------------------------
+
+def _short(n) -> str:
+    return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.0f}k" if n >= 1e4 else f"{n / 1e3:.1f}k" if n >= 1e3 else str(round(n))
+
+
+def _clip(text: str, n: int = 80) -> str:
+    text = (text or "").strip().rstrip(".")
+    return text if len(text) <= n else text[: n - 1].rsplit(" ", 1)[0] + "…"
+
+
+def quality_notes(c: dict) -> dict:
+    """One short line per audience-quality part, with a sign: "+" good, "-" a concern, "" neutral."""
+    notes = {}
+    auth = c.get("authenticity") or {}
+    warn = [s for s in auth.get("signals", []) if s["kind"] != "good"]
+    good = [s for s in auth.get("signals", []) if s["kind"] == "good"]
+    if warn:
+        notes["authenticity"] = ("-", warn[0]["text"])
+    elif good:
+        notes["authenticity"] = ("+", good[0]["text"])
+    elif auth.get("confidence") == "low":
+        notes["authenticity"] = ("", "No warning signs, but too little data to confirm the audience is real")
+    else:
+        notes["authenticity"] = ("", "No warning signs found")
+    vs = c.get("engagement_vs_typical")
+    if vs is not None:
+        notes["engagement"] = ("+" if vs >= 1.2 else "-" if vs < 0.8 else "",
+                               f"{vs}× the engagement typical for their size")
+    else:
+        notes["engagement"] = ("", "Engagement unknown: no likes data")
+    rng = c.get("views_range")
+    if rng and rng[0]:
+        ratio = rng[1] / rng[0]
+        text = f"Most posts get {_short(rng[0])}–{_short(rng[1])} views"
+        if (c.get("views_spread") or 0) >= 2:
+            text += "; the average is lifted by a viral hit"
+        notes["consistency"] = ("+" if ratio <= 2 else "-" if ratio >= 3 else "", text if ratio <= 3 else "Views swing a lot: " + text[0].lower() + text[1:])
+    else:
+        notes["consistency"] = ("", "Too few recent posts to judge")
+    ppm, days = c.get("posts_per_month"), c.get("days_since_last_post")
+    if ppm is not None and days is not None:
+        sign = "+" if ppm >= 4 and days <= 14 else "-" if days > 30 or ppm < 2 else ""
+        notes["activity"] = (sign, f"Posts {ppm:g} times a month, last post {'today' if days == 0 else f'{days} days ago'}")
+    else:
+        notes["activity"] = ("", "Posting rhythm unknown")
+    t = c.get("views_trend")
+    if t is None:
+        notes["momentum"] = ("", "Not enough posts to see a trend")
+    elif abs(t) < 0.1:
+        notes["momentum"] = ("", "Views steady over the last 3 months")
+    else:
+        notes["momentum"] = ("+" if t >= 0.2 else "-" if t <= -0.2 else "",
+                             f"Views {'up' if t > 0 else 'down'} {abs(round(t * 100))}% in the last 30 days")
+    return notes
+
+
+def _sorted_pros(evidence: list[dict]) -> list[dict]:
+    order = ["content", "audience", "market", "readiness", "brand"]
+    return sorted((e for e in evidence if e["sign"] != "-"),
+                  key=lambda e: (e.get("src") != "ai", order.index(e["dim"]) if e["dim"] in order else 9))
+
+
+def fit_word(s: int) -> str:
+    return "Excellent fit" if s >= 85 else "Strong fit" if s >= 75 else "Possible fit" if s >= 55 else "Weak fit"
+
+
+def quality_word(s: int) -> str:
+    return "Excellent audience" if s >= 85 else "Healthy audience" if s >= 75 else "Mixed audience" if s >= 55 else "Doubtful audience"
+
+
+def explain(c: dict, m: dict) -> dict:
+    """Hover texts: first line = the verdict, then up to three short reasons about *this* creator.
+    Lines start with "+ " (helps), "- " (hurts) or "? " (not checked)."""
+    ev = m.get("evidence") or []
+    pros, cons = _sorted_pros(ev), [e for e in ev if e["sign"] == "-"]
+    fit_lines = [f"+ {_clip(e['text'], 70)}" for e in pros[:2]] + [f"- {_clip(e['text'], 70)}" for e in cons[:1]]
+    if m.get("checked", "rules") == "rules":
+        fit_lines.append("? Quick estimate: the AI hasn't read their posts yet")
+    notes = quality_notes(c)
+    ranked = sorted(notes.items(), key=lambda kv: {"-": 0, "+": 1, "": 2}[kv[1][0]])
+    q_lines = [f"{sign or '?'} {_clip(text, 70)}" for _, (sign, text) in ranked if sign][:3] or \
+              [f"? {_clip(notes['authenticity'][1], 70)}"]
+    parts = {}
+    for dim in FIT_PARTS:
+        claims = [e for e in ev if e["dim"] == dim]
+        claims.sort(key=lambda e: e["sign"] != "-")  # a concern first: it explains why it isn't 100
+        parts[dim] = "\n".join(("- " if e["sign"] == "-" else "+ ") + _clip(e["text"], 70) for e in claims[:2]) \
+            or "? No specific evidence either way"
+    return {
+        "fit": "\n".join([f"{fit_word(m.get('fit', 0))} · {m.get('fit', 0)}"] + fit_lines),
+        "quality": "\n".join([f"{quality_word(m.get('quality') or 0)} · {m.get('quality')}"] + q_lines),
+        "parts": parts,
+        "qparts": {k: f"{sign or '?'} {_clip(text, 90)}" for k, (sign, text) in notes.items()},
+    }

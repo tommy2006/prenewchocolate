@@ -22,13 +22,16 @@ Scout automates influencer discovery for brands like Prenew, with a focus on mic
    copy-paste, whether viewers ask for advice. Together with views per follower, likes per view and comments per like
    (compared with accounts of the same size), this gives an **authenticity** score with the signals behind it
    ("only 3% of followers watch a typical post", "many likes but almost no comments"). Signals, never "bots detected".
+   It starts at a neutral 70 ("nothing suspicious found" isn't proof), rises only with positive evidence, and can't
+   get high when there's little data.
 5. **Score like a marketer, with evidence.** Two headline numbers instead of one opaque score:
    - **Fit**: would a marketer pick them for this brand? *Content* (matches the creator types), *audience* (viewers
      are the brand's customers: old enough, interested, trusting), *market* (incl. comment language), *brand & safety*
      (tone, gambling, competitor sponsors) and *readiness & cost* (contact, sponsor experience without ad fatigue,
      estimated price vs budget).
-   - **Audience quality**: authenticity, engagement vs typical, consistency (share of posts reaching half the
-     average, so one viral hit doesn't count as an audience), activity and momentum (views trend).
+   - **Audience quality**: authenticity, engagement vs typical, consistency (how steady views are across the middle
+     half of their posts, so one viral hit or flop doesn't distort it), activity and momentum (views trend, on a
+     curve: only a doubling gets past 90). Scores of 100 are rare by design: most creators have something to improve.
 
    Every part comes with **evidence**: short claims that cite the posts (and quote the comments) they're based on.
    The AI must cite post and comment references; a claim citing a post that doesn't exist is dropped. A
@@ -74,9 +77,12 @@ Scout found and where they rank.
 **Searching.** Type what you want in plain words, e.g. *Finnish CS2 YouTubers under 50k with email*, and press
 Enter: markets, platform, creator types, size and "has email" are filled in instantly by rules, and the AI reads
 whatever the rules didn't understand. The filters stay visible and editable; *Undo* puts them back. Click the empty
-search box for **recent searches**. The list is a table (or cards) with Fit, Quality, followers, median views, trend
-and market; click a row for the full picture in a side panel. Keyboard: ↑/↓ move, Enter open, s shortlist,
-x select, h not a fit, / search.
+search box for **recent searches**. The list is a table (or cards) with Fit, Quality, followers, typical views
+with their trend, and market. **Hover any score** for a short explanation about that creator (what helps, what
+hurts, what isn't checked yet). Click a creator to open a window with a **summary** (verdict, Fit and Quality in
+plain words, key numbers, why they could work, what to watch out for, contact); the evidence, audience details,
+all numbers, recent posts and the first message are in sections you open when you need them. Keyboard: ↑/↓ move
+(also inside the window), Enter open, s shortlist, x select, h not a fit, / search, Esc close.
 
 ## Setup (5 minutes)
 
