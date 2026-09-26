@@ -584,7 +584,6 @@ function scoreHtml(value, c, kind) {
 
 function badges(c) {
   return [
-    c.is_new ? '<span class="tag new">New</span>' : "",
     c.partner ? `<span class="tag partner" title="${esc(`Worked with ${S.company.name} before${c.partner === true ? "" : ` (latest: ${c.partner})`}`)}">🤝 Past partner</span>` : "",
     c.hidden_gem ? '<span class="tag gem" title="Small, highly engaged, on-niche and authentic">💎 Gem</span>' : "",
     c.checked === "deep" ? '<span class="tag deep" title="Deep evaluation done">✦ Evaluated</span>' : "",
@@ -625,7 +624,7 @@ function modernCardHtml(c, i) {
   const meta = [`${fmtNum(c.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}`, S.meta.markets[c.country]?.name || c.country, c.niche].filter(Boolean).join(" · ");
   const score = (label, value, kind, word) => `<span class="mscore" data-tip="${esc(c.tips?.[kind] || "")}">${ringHtml(value, "sm", { quick: c.checked === "rules" })}
     <span><b>${label}</b><small>${word}</small></span></span>`;
-  const tags = `${c.is_new ? '<span class="mpill new">New</span>' : ""}${c.hidden_gem ? '<span class="mpill gem">Hidden gem</span>' : ""}${c.partner ? '<span class="mpill partner">Past partner</span>' : ""}`;
+  const tags = `${c.hidden_gem ? '<span class="mpill gem">Hidden gem</span>' : ""}${c.partner ? '<span class="mpill partner">Past partner</span>' : ""}`;
   return `<article class="card mcard ${i === S.cursor ? "cur" : ""} ${S.panelId === c.id ? "open" : ""}" data-id="${esc(c.id)}" data-i="${i}" tabindex="0" aria-label="${esc(c.name)}, fit ${c.fit}, quality ${c.quality}">
     <div class="mcard-img">${img}
       <span class="mplat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
@@ -652,7 +651,6 @@ function cardHtml(c, i) {
       ${img}
       <span class="plat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
       <span class="pills">${pillHtml("Fit", c.fit, c, "fit")}${pillHtml("Quality", c.quality, c, "quality")}</span>
-      ${c.is_new ? '<span class="ribbon">NEW</span>' : ""}
       <span class="badges">
         ${c.partner ? `<span class="badge" title="${esc(`Worked with ${S.company.name} before`)}">🤝</span>` : ""}
         ${c.hidden_gem ? '<span class="badge" title="Hidden gem: small, highly engaged, on-niche and authentic">💎</span>' : ""}
@@ -962,7 +960,7 @@ function renderDetail(d) {
   $("#detail").innerHTML = `
     <div class="d-grid">
       <aside class="d-aside">
-        <div class="d-cover">${cover}<span class="plat plat-${c.platform}">${ICONS[c.platform]}</span>${c.is_new ? '<span class="ribbon">NEW</span>' : ""}</div>
+        <div class="d-cover">${cover}<span class="plat plat-${c.platform}">${ICONS[c.platform]}</span></div>
         <div class="p-actions d-actions">
           <button class="btn ${starred ? "dark" : "primary"}" data-act="panel-star">${starred ? ICONS.starOn + " On shortlist" : ICONS.star + " Add to shortlist"}</button>
           ${m.status === "hidden" ? `<button class="btn" data-act="panel-unhide">Unhide</button>` : `<button class="btn" data-act="panel-hide">Not a fit ${ICONS.chev}</button>`}
@@ -978,7 +976,7 @@ function renderDetail(d) {
             <h2>${nameLink(c)}</h2>
             <div class="d-sub"><span class="plat-inline plat-${c.platform}">${ICONS[c.platform]}</span><a href="${esc(cr.url)}" target="_blank" rel="noopener">${esc(cr.handle || platform)}</a>
               <span>${fmtNum(cr.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}</span>${country ? `<span>${esc(country)}</span>` : ""}${lang ? `<span>${esc(lang)}</span>` : ""}</div>
-            <div class="d-badges">${badges(c).replace('<span class="tag new">New</span>', "")}${partner ? `<span class="tag partner">🤝 Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? '<span class="tag">Hidden</span>' : ""}</div>
+            <div class="d-badges">${badges(c)}${partner ? `<span class="tag partner">🤝 Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? '<span class="tag">Hidden</span>' : ""}</div>
           </div>
           <div class="d-nav">
             <button class="icon-btn small" data-act="panel-prev" ${i <= 0 ? "disabled" : ""} title="Previous creator (↑)">${ICONS.up}</button>

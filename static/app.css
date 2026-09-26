@@ -390,7 +390,6 @@ th.num { text-align: right; }
   display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 5px; font-size: 11px;
   font-weight: 600; background: var(--surface-2); color: var(--muted); white-space: nowrap; flex: none;
 }
-.tag.new { background: var(--accent-soft); color: var(--accent); }
 .tag.partner { background: var(--good-bg); color: var(--good-ink); }
 .tag.gem { background: #e8efff; color: #1d4ed8; }
 .tag.deep { background: var(--text); color: var(--bg); }
@@ -429,10 +428,6 @@ th.num { text-align: right; }
 .pill-score .ring { --rs: 30px; --rw: 3.6; }
 .pill-score .ring-track { stroke: #e3e1da; }
 .pill-score small { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.ribbon {
-  position: absolute; bottom: 10px; left: 0; z-index: 2; padding: 3px 10px 3px 8px; border-radius: 0 6px 6px 0;
-  background: var(--accent); color: #fff; font-family: var(--font-display); font-size: 15px; letter-spacing: 1px;
-}
 .badges { position: absolute; bottom: 9px; right: 8px; z-index: 2; display: flex; gap: 5px; }
 .badge {
   height: 26px; min-width: 26px; padding: 0 6px; border-radius: 13px; display: grid; place-items: center; border: 0;
@@ -1042,7 +1037,6 @@ html[data-ui="modern"] .empty { border-radius: 24px; border-style: solid; border
 html[data-ui="modern"] .empty h2 { font-weight: 800; font-size: 28px; letter-spacing: -.03em; }
 html[data-ui="modern"] .shortlist-head h1 { font-weight: 800; font-size: 38px; letter-spacing: -.035em; }
 html[data-ui="modern"] .tag.gem { background: var(--gem-bg); color: var(--gem-ink); }
-html[data-ui="modern"] .tag.new { background: var(--accent); color: #fff; }
 
 /* Creator cards: a big rounded image, the text and scores below (like an article card) */
 html[data-ui="modern"] .posters { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 40px 26px; }
@@ -1078,7 +1072,6 @@ html[data-ui="modern"] .posters { grid-template-columns: repeat(auto-fill, minma
   font-size: 12.5px; font-weight: 600; background: var(--surface-2); color: var(--text); border: 1.5px solid transparent;
 }
 .mpill b { font-weight: 800; }
-.mpill.new { background: var(--accent); color: #fff; }
 .mpill.gem { background: var(--gem-bg); color: var(--gem-ink); }
 .mpill.partner { background: var(--good-bg); color: var(--good-ink); }
 .mcard h3 { margin: 4px 0 0; font-size: 19px; font-weight: 800; letter-spacing: -.02em; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1095,10 +1088,6 @@ html[data-ui="modern"] .d-aside { padding: 28px 0 28px 28px; gap: 16px; }
 html[data-ui="modern"] .d-cover { border: 0; box-shadow: none; transform: none; border-radius: 24px; aspect-ratio: 4 / 5; }
 html[data-ui="modern"] .d-cover .plat { border-radius: 50%; width: 34px; height: 34px; top: 12px; left: 12px; background: var(--chip); border: 0; }
 html[data-ui="modern"] .d-cover .plat-tiktok { color: var(--text); }
-html[data-ui="modern"] .ribbon {
-  left: 12px; bottom: 12px; border-radius: 999px; padding: 4px 11px; font-family: var(--font-display);
-  font-size: 12px; font-weight: 700; letter-spacing: 0;
-}
 html[data-ui="modern"] .d-head { padding: 28px 28px 14px; }
 html[data-ui="modern"] .d-title h2 { font-weight: 800; font-size: 34px; letter-spacing: -.035em; line-height: 1.1; }
 html[data-ui="modern"] .d-body { padding: 22px 28px 32px; }
