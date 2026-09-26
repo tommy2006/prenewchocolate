@@ -1,8 +1,7 @@
 """HTTP API + static UI. Run: python -m uvicorn app.main:app --port 8000"""
 import asyncio
-import csv
-import io
 import logging
+import re
 
 from typing import Annotated
 
@@ -11,10 +10,11 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, llm, settings
-from .checks import CheckError, check_apify, check_youtube
-from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, TIERS
-from .pipeline import retry_scoring, run_job
+from . import config, export as exporter, linking, llm, localai, partners, rules, settings
+from .checks import CheckError, check_youtube
+from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
+from .metrics import agency_hint
+from .pipeline import build_match, fetch_linked, merge_ai, retry_scoring, run_job
 from .store import DEFAULT_SEARCH, new_id, now_iso, store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -22,7 +22,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 app = FastAPI(title="Scout")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 app.mount("/img", StaticFiles(directory=config.IMG_DIR), name="img")
-_background: set[asyncio.Task] = set()
+_tasks: dict[str, asyncio.Task] = {}  # job id -> the running search, so it can be stopped
+
+
+def _run(job_id: str, coro) -> None:
+    task = asyncio.create_task(coro)
+    _tasks[job_id] = task
+    task.add_done_callback(lambda _: _tasks.pop(job_id, None))
 
 SHORTLIST_STATUSES = ("shortlisted", "contacted", "replied", "declined")
 
@@ -54,6 +60,7 @@ async def meta():
         "markets": MARKETS,
         "languages": LANGUAGES,
         "platforms": PLATFORMS,
+        "search_platforms": SEARCH_PLATFORMS,
         "tiers": [{"key": k, "min": lo, "max": hi, "label": label} for k, lo, hi, label in TIERS],
         "deal_types": DEAL_TYPES,
         "sources": settings.source_status(),
@@ -62,9 +69,10 @@ async def meta():
 
 
 def _ai_summary() -> dict:
-    ai = settings.ai_config()
-    return {"provider": ai["provider"], "label": ai["label"], "model": ai["model"],
-            "ready": ai["ready"], "web_search": ai["web_search"]}
+    ai, writer = settings.ai_config(), settings.writer_config()
+    return {"provider": ai["provider"], "label": ai["label"], "model": ai["model"], "local": ai["local"],
+            "ready": ai["ready"], "web_search": settings.scout_config() is not None,
+            "writer": {"label": writer["label"], "model": writer["model"], "local": writer["local"]}}
 
 
 # --- Companies -------------------------------------------------------------------------------
@@ -88,27 +96,30 @@ class SearchIn(BaseModel):
     ai_scout: bool = False
 
 
-async def _suggest(company: dict) -> list[str]:
-    """Creator-type ideas from the company description. Never blocks company setup on failure."""
-    if not settings.source_status()["ai"] or not company.get("description"):
-        return []
+async def _fill_suggestions(company_id: str) -> None:
+    """Creator types and ready-made searches from the company description, written in the background:
+    on a local model this takes a minute or two, and nobody should wait for it to add a company."""
+    company = store.companies.get(company_id)
+    if not company:
+        return
     try:
-        return await asyncio.wait_for(
-            llm.suggest_tags(company["name"], company["description"], company["search"].get("tags", [])), 60)
+        tags = await asyncio.wait_for(
+            llm.suggest_tags(company["name"], company["description"], company["search"].get("tags", [])), 300)
+        company["suggested_tags"] = tags or company.get("suggested_tags", [])
+        store.save()
+        searches = await asyncio.wait_for(llm.suggest_searches(company), 400)
+        company["suggested_searches"] = searches or company.get("suggested_searches", [])
     except Exception:
-        logging.getLogger("scout").exception("tag suggestion failed")
-        return []
+        logging.getLogger("scout").exception("suggestions for %s failed", company_id)
+    finally:
+        company["suggesting"] = False
+        store.save()
 
 
-async def _suggest_searches(company: dict) -> list[dict]:
-    """Ready-made searches for the company. Never blocks company setup on failure."""
-    if not settings.source_status()["ai"] or not company.get("description"):
-        return []
-    try:
-        return await asyncio.wait_for(llm.suggest_searches(company), 90)
-    except Exception:
-        logging.getLogger("scout").exception("search suggestion failed")
-        return []
+def _start_suggestions(company: dict) -> None:
+    if settings.source_status()["ai"] and company.get("description"):
+        company["suggesting"] = True
+        _run(f"suggest_{company['id']}", _fill_suggestions(company["id"]))
 
 
 def _company(company_id: str) -> dict:
@@ -118,9 +129,14 @@ def _company(company_id: str) -> dict:
     return company
 
 
+def _public(company: dict) -> dict:
+    """A company for the UI: the imported tracker as a short summary, not every row."""
+    return {**company, "partners": _partners_summary(company)}
+
+
 @app.get("/api/companies")
 async def list_companies():
-    return sorted(store.companies.values(), key=lambda c: c.get("created_at", ""))
+    return [_public(c) for c in sorted(store.companies.values(), key=lambda c: c.get("created_at", ""))]
 
 
 @app.post("/api/companies")
@@ -138,11 +154,10 @@ async def create_company(body: CompanyIn):
         "search": dict(DEFAULT_SEARCH),
         "created_at": now_iso(),
     }
-    company["suggested_tags"] = await _suggest(company)
-    company["suggested_searches"] = await _suggest_searches(company)
     store.companies[company["id"]] = company
+    _start_suggestions(company)
     store.save()
-    return company
+    return _public(company)
 
 
 @app.put("/api/companies/{company_id}")
@@ -152,10 +167,9 @@ async def update_company(company_id: str, body: CompanyIn):
     company["name"] = body.name.strip() or company["name"]
     company["description"] = body.description.strip()
     if changed:
-        company["suggested_tags"] = await _suggest(company) or company.get("suggested_tags", [])
-        company["suggested_searches"] = await _suggest_searches(company) or company.get("suggested_searches", [])
+        _start_suggestions(company)
     store.save()
-    return company
+    return _public(company)
 
 
 @app.put("/api/companies/{company_id}/search")
@@ -217,7 +231,8 @@ def _haystack(c: dict, m: dict) -> str:
     return " ".join(p for p in parts if p).lower()
 
 
-def card(company: dict, c: dict, m: dict) -> dict:
+def card(company: dict, c: dict, m: dict, partner_idx: dict | None = None) -> dict:
+    partner = partners.find(partner_idx if partner_idx is not None else partners.index(company), c, m)
     return {
         "id": c["id"],
         "platform": c["platform"],
@@ -246,6 +261,8 @@ def card(company: dict, c: dict, m: dict) -> dict:
         "engagement_rate": c.get("engagement_rate"),
         "engagement_vs_typical": c.get("engagement_vs_typical"),
         "is_new": m.get("job_id") == company.get("last_job_id"),
+        # Worked with this company before (from the imported tracker): their latest week, or True.
+        "partner": ((partner["weeks"] or [True])[-1]) if partner else None,
     }
 
 
@@ -345,11 +362,12 @@ async def list_creators(company_id: str, f: Annotated[Filters, Depends()], page:
     pages = max(1, -(-len(rows) // page_size))
     page = max(1, min(page, pages))
     chunk = rows[(page - 1) * page_size: page * page_size]
+    idx = partners.index(company)
     return {
         "total": len(rows),
         "page": page,
         "pages": pages,
-        "items": [card(company, c, m) for c, m in chunk],
+        "items": [card(company, c, m, idx) for c, m in chunk],
         "library_size": len(store.matches.get(company_id, {})),
     }
 
@@ -367,10 +385,18 @@ def _pair(company_id: str, creator_id: str) -> tuple[dict, dict, dict]:
 async def creator_detail(company_id: str, creator_id: str):
     company, c, m = _pair(company_id, creator_id)
     drop = {"avatar_src", "cover_src"}
+    ids = linking.groups(store.creators).get(creator_id, [creator_id])
+    others = [o for o in linking.profiles(ids, store.creators).values() if o["id"] != creator_id and o["platform"] != c["platform"]]
+    partner = partners.find(partners.index(company), c, m)
     return {
         "card": card(company, c, m),
         "creator": {k: v for k, v in c.items() if k not in drop},
         "match": m,
+        # The same person on other platforms, when one profile links to the other.
+        "linked": [{k: o.get(k) for k in ("id", "platform", "name", "handle", "url", "followers", "avg_views",
+                                            "views_window", "emails")} for o in others],
+        "partner": {"weeks": partner["weeks"], "collabs": partner["collabs"]} if partner else None,
+        "agency": agency_hint(c) or bool(partner and partner["agency"]),
     }
 
 
@@ -388,6 +414,26 @@ async def set_status(company_id: str, creator_id: str, body: StatusIn):
     return {"status": m["status"]}
 
 
+@app.post("/api/companies/{company_id}/creators/{creator_id}/ai-check")
+async def ai_check_one(company_id: str, creator_id: str):
+    """Let the search AI re-score one creator that only has a quick score."""
+    company, c, m = _pair(company_id, creator_id)
+    ai = settings.ai_config()
+    if not ai["ready"]:
+        raise HTTPException(400, "No AI is set up yet. Open Settings.")
+    search = store.jobs.get(m.get("job_id")) or {**company.get("search", {}), "id": m.get("job_id") or ""}
+    results = await llm.score_batch(company, search, [c], ai)
+    r = results.get(creator_id)
+    if not r:
+        raise HTTPException(502, "The AI didn't return a result for this creator. Try again.")
+    r = merge_ai(rules.quick_score(c, company, search), r)
+    match = build_match(c, r, m.get("job_id"), m.get("search_markets") or search.get("markets", []))
+    match.update(status=m.get("status"), pitch=m.get("pitch"), created_at=m.get("created_at", match["created_at"]))
+    store.matches[company_id][creator_id] = match
+    store.save()
+    return match
+
+
 @app.post("/api/companies/{company_id}/creators/{creator_id}/pitch")
 async def pitch(company_id: str, creator_id: str):
     company, c, m = _pair(company_id, creator_id)
@@ -398,83 +444,68 @@ async def pitch(company_id: str, creator_id: str):
     return m["pitch"]
 
 
-# Columns follow what Prenew asked for: country, subscribers, avg views (30/90 days), niche + games,
-# contact details, then risks and trend.
-EXPORT_COLUMNS = [
-    ("Name", 26), ("Platform", 11), ("Profile URL", 40), ("Country", 9), ("Language", 10),
-    ("Followers / subscribers", 14), ("Avg views", 12), ("Avg views period", 16), ("Views based on", 22),
-    ("Views trend", 12), ("Trend", 11), ("Engagement rate %", 12), ("Engagement vs typical", 12),
-    ("Posts per month", 10), ("Last post (days ago)", 10), ("Niche", 16), ("Games", 28), ("Tags", 36),
-    ("Match score", 9), ("Niche fit", 9), ("Market fit", 9), ("Brand safety", 9), ("Risks / red flags", 44),
-    ("Competitor sponsor", 10), ("Email", 30), ("Other contacts", 44), ("Summary", 60), ("Why they fit", 70),
-    ("Status", 12), ("Found via", 40),
-]
-
-
-def _export_row(c: dict, m: dict) -> list:
-    er = c.get("engagement_rate")
-    trend = c.get("views_trend")
-    socials = c.get("socials") or {}
-    others = [f"{k}: {v}" for k, v in socials.items()] + [l for l in c.get("links", []) if l not in socials.values()]
-    return [
-        c.get("name"), PLATFORMS[c["platform"]], c.get("url"), m.get("country") or c.get("country") or "",
-        LANGUAGES.get(m.get("language") or c.get("language") or "", m.get("language") or ""),
-        c.get("followers"), c.get("avg_views"), c.get("views_window") or "", c.get("views_basis") or "",
-        f"{trend:+.0%}" if trend is not None else "", c.get("trend") or "",
-        round(er * 100, 2) if er is not None else "", c.get("engagement_vs_typical"),
-        c.get("posts_per_month"), c.get("days_since_last_post"), m.get("niche") or "", ", ".join(m.get("games", [])),
-        ", ".join(m.get("tags", [])), m["score"], m.get("niche_fit"), m.get("market_fit"), m.get("brand_safety"),
-        "; ".join(m.get("red_flags", [])), "yes" if m.get("competitor_sponsor") else "",
-        "; ".join(c.get("emails", [])), "; ".join(others[:6]), m.get("summary") or "", " | ".join(m.get("why", [])),
-        m.get("status") or "", "; ".join(c.get("found_via", [])),
-    ]
-
-
-def _xlsx(company: dict, rows: list[tuple[dict, dict]]) -> bytes:
-    from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Creators"
-    ws.append([name for name, _ in EXPORT_COLUMNS])
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="16161A")
-        cell.alignment = Alignment(vertical="center", wrap_text=True)
-    for c, m in rows:
-        ws.append(_export_row(c, m))
-        link = ws.cell(row=ws.max_row, column=3)
-        if link.value:
-            link.hyperlink = link.value
-            link.font = Font(color="1D4ED8", underline="single")
-    for i, (_, width) in enumerate(EXPORT_COLUMNS, start=1):
-        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = width
-    ws.freeze_panes = "B2"
-    ws.auto_filter.ref = ws.dimensions
-    ws.row_dimensions[1].height = 32
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
-
 @app.get("/api/companies/{company_id}/export")
 async def export(company_id: str, f: Annotated[Filters, Depends()], format: str = "xlsx"):
-    """Download what the grid shows (or the shortlist, with status=shortlist) as Excel or CSV."""
+    """Download what the grid shows (or the shortlist, with status=shortlist) as Excel or CSV,
+    in the layout of the company's collaboration tracker: one row per creator, platforms side by side."""
     company = _company(company_id)
-    rows = _rows(company_id, f)
+    people = exporter.build_rows(company, _rows(company_id, f), store.creators, store.matches.get(company_id, {}))
     stem = f"{company['name'].lower().replace(' ', '-')}-{'shortlist' if f.status == 'shortlist' else 'creators'}"
     if format == "csv":
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow([name for name, _ in EXPORT_COLUMNS])
-        w.writerows(_export_row(c, m) for c, m in rows)
-        # BOM so Excel opens UTF-8 (ä, ö, ß) correctly
-        return Response("﻿" + buf.getvalue(), media_type="text/csv",
+        return Response(exporter.to_csv(people), media_type="text/csv",
                         headers={"Content-Disposition": f'attachment; filename="{stem}.csv"'})
-    return Response(_xlsx(company, rows),
+    return Response(exporter.to_xlsx(people),
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="{stem}.xlsx"'})
+
+
+# --- Past collaborations -----------------------------------------------------------------------
+
+@app.post("/api/companies/{company_id}/partners")
+async def import_partners(company_id: str, request: Request, filename: str = "tracker.xlsx"):
+    """Upload the company's collaboration tracker (the raw file is the request body)."""
+    company = _company(company_id)
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "The file is empty")
+    if len(data) > 10_000_000:
+        raise HTTPException(400, "That file is too big (10 MB max)")
+    try:
+        items = partners.parse(data, filename)
+    except partners.TrackerError as e:
+        raise HTTPException(400, str(e))
+    company["partners"] = {"file": filename, "imported_at": now_iso(), "items": items}
+    store.save()
+    idx = partners.index(company)
+    found = sum(1 for cid, m in store.matches.get(company_id, {}).items()
+                if cid in store.creators and partners.find(idx, store.creators[cid], m))
+    return {"partners": _partners_summary(company), "in_library": found}
+
+
+@app.delete("/api/companies/{company_id}/partners")
+async def remove_partners(company_id: str):
+    company = _company(company_id)
+    company.pop("partners", None)
+    store.save()
+    return {"ok": True}
+
+
+def _partners_summary(company: dict) -> dict | None:
+    p = company.get("partners")
+    if not p:
+        return None
+    return {"file": p["file"], "imported_at": p["imported_at"], "count": len(p["items"]),
+            "collabs": sum(i["collabs"] for i in p["items"])}
+
+
+@app.post("/api/companies/{company_id}/link-profiles")
+async def link_profiles(company_id: str, limit: int = 30):
+    """Fetch the other platform (YouTube <-> TikTok) of ranked creators who link to it, best first."""
+    _company(company_id)
+    ranked = sorted(store.matches.get(company_id, {}).items(), key=lambda kv: -kv[1]["score"])
+    creators = [store.creators[cid] for cid, _ in ranked if cid in store.creators]
+    added = await fetch_linked(creators, limit=limit)
+    return {"added": added}
 
 
 # --- Discovery jobs --------------------------------------------------------------------------
@@ -486,12 +517,10 @@ class JobIn(SearchIn):
 @app.post("/api/companies/{company_id}/jobs")
 async def start_job(company_id: str, body: JobIn):
     company = _company(company_id)
-    sources = settings.source_status()
-    if not sources["ai"]:
-        raise HTTPException(400, "No AI is set up yet. Open Settings and add a key for the AI you want to use.")
-    platforms = [p for p in (body.platforms or list(PLATFORMS)) if p in PLATFORMS and sources.get(p)]
+    sources = settings.source_status()  # no AI set up is fine: planning uses templates, scores come from rules
+    platforms = [p for p in (body.platforms or list(SEARCH_PLATFORMS)) if p in SEARCH_PLATFORMS and sources.get(p)]
     if not platforms:
-        raise HTTPException(400, "None of the chosen platforms is set up yet. Add a YouTube key or an Apify token in Settings.")
+        raise HTTPException(400, "None of the chosen platforms is set up yet. Add a YouTube key in Settings, or search TikTok.")
     markets = [m for m in body.markets if m in MARKETS]
     if not markets:
         raise HTTPException(400, "Pick at least one market to search in")
@@ -531,9 +560,7 @@ async def start_job(company_id: str, body: JobIn):
     }
     store.jobs[job["id"]] = job
     store.save()
-    task = asyncio.create_task(run_job(job["id"]))
-    _background.add(task)
-    task.add_done_callback(_background.discard)
+    _run(job["id"], run_job(job["id"]))
     return job
 
 
@@ -549,9 +576,26 @@ async def retry_job_scoring(job_id: str):
     if not settings.source_status()["ai"]:
         raise HTTPException(400, "No AI is set up yet. Open Settings and add a key for the AI you want to use.")
     job["status"] = "queued"
-    task = asyncio.create_task(retry_scoring(job_id))
-    _background.add(task)
-    task.add_done_callback(_background.discard)
+    _run(job_id, retry_scoring(job_id))
+    return job
+
+
+@app.post("/api/jobs/{job_id}/stop")
+async def stop_job(job_id: str):
+    """Stop a running search. Creators already scored stay in the results."""
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    task = _tasks.get(job_id)
+    if task and not task.done():
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), 10)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+    elif job["status"] in ("queued", "running"):  # e.g. left over from a restart
+        job["status"] = "stopped"
+        store.save()
     return job
 
 
@@ -581,11 +625,10 @@ class ProviderIn(BaseModel):
 
 class SettingsIn(BaseModel):
     ai_provider: str | None = None
+    writer_provider: str | None = None  # "" = the search AI also writes messages
     providers: dict[str, ProviderIn] = {}
     youtube_api_key: str | None = None
-    apify_token: str | None = None
     clear_youtube_api_key: bool = False
-    clear_apify_token: bool = False
 
 
 @app.get("/api/settings")
@@ -605,14 +648,13 @@ async def put_settings(body: SettingsIn):
 
 
 class TestIn(BaseModel):
-    target: str  # "ai" | "youtube" | "apify"
+    target: str  # "ai" | "youtube"
     provider: str | None = None
     api_key: str | None = None
     model: str | None = None
     base_url: str | None = None
     workspace_id: str | None = None
     youtube_api_key: str | None = None
-    apify_token: str | None = None
 
 
 def _ai_overrides(body: "TestIn") -> dict:
@@ -628,15 +670,61 @@ async def test_settings(body: TestIn):
                 raise HTTPException(400, "Unknown AI provider")
             ai = settings.ai_config(body.provider, _ai_overrides(body))
             if not ai["ready"]:
-                return {"ok": False, "message": "Add an API key and a model first"}
+                return {"ok": False, "message": "Download a model first" if ai["local"] else "Add an API key and a model first"}
             return {"ok": True, "message": await llm.test_ai(ai)}
         if body.target == "youtube":
             return {"ok": True, "message": await check_youtube(body.youtube_api_key or settings.youtube_key())}
-        if body.target == "apify":
-            return {"ok": True, "message": await check_apify(body.apify_token or settings.apify_token())}
     except (llm.LLMError, CheckError) as e:
         return {"ok": False, "message": str(e)}
     raise HTTPException(400, "Unknown test")
+
+
+# --- Local AI (Ollama) -----------------------------------------------------------------------
+
+_hardware: dict = {}
+
+
+@app.get("/api/local-ai")
+async def local_ai():
+    """This computer, the model we recommend for it, what Ollama has, and any download in progress."""
+    if not _hardware:
+        _hardware.update(await asyncio.to_thread(localai.hardware))
+    return {
+        "hardware": _hardware,
+        "recommended": localai.recommend(_hardware),
+        "catalog": localai.CATALOG,
+        "ollama": await localai.status(),
+        "pull": localai.pull_state or None,
+    }
+
+
+class PullIn(BaseModel):
+    model: str
+
+
+@app.post("/api/local-ai/pull")
+async def local_ai_pull(body: PullIn):
+    """Download a model (only when the user presses Download)."""
+    if not re.fullmatch(r"[\w.\-:/]{2,80}", body.model):
+        raise HTTPException(400, "That isn't a model name")
+    if localai.pull_state and not localai.pull_state.get("done"):
+        raise HTTPException(409, f"Already downloading {localai.pull_state['model']}")
+    if not (await localai.status())["running"]:
+        raise HTTPException(400, "The local AI (Ollama) isn't running. Start it first.")
+    _run("pull", localai.pull(body.model))
+    await asyncio.sleep(0.3)
+    return localai.pull_state
+
+
+@app.post("/api/local-ai/start")
+async def local_ai_start():
+    if not localai.start():
+        raise HTTPException(400, "Ollama isn't installed. Get it free from ollama.com/download, then try again.")
+    for _ in range(20):
+        await asyncio.sleep(0.5)
+        if (await localai.status())["running"]:
+            return {"ok": True}
+    raise HTTPException(500, "Ollama didn't start. Open the Ollama app yourself.")
 
 
 @app.post("/api/settings/models")

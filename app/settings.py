@@ -1,5 +1,10 @@
 """User settings from the Settings screen: which AI to use, API keys, data-source keys.
 
+Two AI roles, so the expensive one is only used when it's worth it:
+- the search AI plans searches and scores every creator (many calls): a free local model by default;
+- the writing AI drafts outreach messages and runs the optional web scout, only when the user clicks
+  (for example Claude). If none is set, the search AI does that too.
+
 Saved to data/settings.json on this computer. Values in .env are used as a fallback, so either works.
 """
 import json
@@ -12,6 +17,13 @@ PATH = DATA_DIR / "settings.json"
 # kind "anthropic" uses the Anthropic SDK; kind "openai" speaks the OpenAI-compatible
 # chat-completions API, which OpenAI, Gemini, OpenRouter, Ollama and most others offer.
 PROVIDERS = {
+    "ollama": {
+        "label": "Local AI", "company": "free, runs on this computer (Ollama)", "kind": "ollama", "env": "",
+        "base_url": "http://localhost:11434", "default_model": "",
+        "key_url": "https://ollama.com/download", "needs_key": False, "editable_url": True, "local": True,
+        # Small models on a laptop CPU: few creators per request, one request at a time.
+        "max_tokens": 4096, "batch_size": 5,
+    },
     "anthropic": {
         "label": "Claude", "company": "Anthropic", "kind": "anthropic", "env": "ANTHROPIC_API_KEY",
         "default_model": "claude-opus-5", "key_url": "https://console.anthropic.com/settings/keys",
@@ -38,11 +50,6 @@ PROVIDERS = {
         "base_url": "https://openrouter.ai/api/v1", "default_model": "",
         "key_url": "https://openrouter.ai/keys", "needs_key": True,
     },
-    "ollama": {
-        "label": "Ollama", "company": "local, free", "kind": "openai", "env": "",
-        "base_url": "http://localhost:11434/v1", "default_model": "llama3.1",
-        "key_url": "https://ollama.com/download", "needs_key": False, "editable_url": True,
-    },
     "custom": {
         "label": "Custom", "company": "any OpenAI-compatible API", "kind": "openai", "env": "",
         "base_url": "", "default_model": "", "key_url": "", "needs_key": False, "editable_url": True,
@@ -51,7 +58,6 @@ PROVIDERS = {
 
 DATA_KEYS = {
     "youtube_api_key": {"env": "YOUTUBE_API_KEY"},
-    "apify_token": {"env": "APIFY_TOKEN"},
 }
 
 
@@ -78,11 +84,7 @@ def ai_provider(data: dict | None = None) -> str:
     data = load() if data is None else data
     if data.get("ai_provider") in PROVIDERS:
         return data["ai_provider"]
-    # Nothing chosen yet: use the first provider that has a key in .env
-    for key, p in PROVIDERS.items():
-        if p["env"] and os.getenv(p["env"]):
-            return key
-    return "anthropic"
+    return "ollama"  # nothing chosen yet: the free local AI
 
 
 def ai_config(provider: str | None = None, overrides: dict | None = None, data: dict | None = None) -> dict:
@@ -96,6 +98,8 @@ def ai_config(provider: str | None = None, overrides: dict | None = None, data: 
     model = overrides.get("model") or saved.get("model") or (
         os.getenv("CLAUDE_MODEL") if provider == "anthropic" else None) or p["default_model"]
     base_url = overrides.get("base_url") or saved.get("base_url") or p.get("base_url", "")
+    if p["kind"] == "ollama":  # older settings saved the OpenAI-compatible address
+        base_url = base_url.rstrip("/").removesuffix("/v1")
     workspace_id = (overrides.get("workspace_id") or saved.get("workspace_id")
                     or (os.getenv("ANTHROPIC_WORKSPACE_ID", "") if p.get("workspace") else "") or "")
     return {
@@ -112,8 +116,34 @@ def ai_config(provider: str | None = None, overrides: dict | None = None, data: 
         "batch_size": p.get("batch_size", 8 if p["kind"] == "anthropic" else 10),
         "fallback_models": [m for m in p.get("fallback_models", []) if m != (model or "").strip()],
         "web_search": p.get("web_search", False),
+        "local": p.get("local", False),
         "ready": bool(model) and (bool(api_key) or not p["needs_key"]) and (p["kind"] == "anthropic" or bool(base_url)),
     }
+
+
+def writer_provider(data: dict | None = None) -> str:
+    """"" = the search AI also writes messages."""
+    data = load() if data is None else data
+    return data.get("writer_provider") if data.get("writer_provider") in PROVIDERS else ""
+
+
+def writer_config() -> dict:
+    """The AI for on-demand work (outreach messages): the writing AI if it's set up, else the search AI."""
+    data = load()
+    key = writer_provider(data)
+    if key:
+        cfg = ai_config(key, data=data)
+        if cfg["ready"]:
+            return cfg
+    return ai_config(data=data)
+
+
+def scout_config() -> dict | None:
+    """The AI web scout needs Claude's web search: the writing AI or the search AI, whichever is Claude."""
+    for cfg in (writer_config(), ai_config()):
+        if cfg["web_search"] and cfg["ready"]:
+            return cfg
+    return None
 
 
 def data_key(name: str, data: dict | None = None) -> str:
@@ -125,18 +155,13 @@ def youtube_key() -> str:
     return data_key("youtube_api_key")
 
 
-def apify_token() -> str:
-    return data_key("apify_token")
-
-
 def source_status() -> dict:
     ai = ai_config()
-    apify = bool(apify_token())
     return {
         "ai": ai["ready"],
+        "scout": scout_config() is not None,
         "youtube": bool(youtube_key()),
-        "tiktok": apify,
-        "instagram": apify,
+        "tiktok": True,  # Scout's own scraper: no key needed
     }
 
 
@@ -166,12 +191,13 @@ def public() -> dict:
             # ✓ in the UI only once the user actually set this provider up: a key, or (for keyless ones
             # like Ollama) being the chosen AI. Merely clicking a card saves an empty slot, which isn't "set up".
             "ready": cfg["ready"] and (bool(cfg["api_key"]) or (not p["needs_key"] and key == ai_provider(data))),
+            "local": p.get("local", False),
         }
     return {
         "ai_provider": ai_provider(data),
+        "writer_provider": writer_provider(data),
         "providers": providers,
         "youtube_key_hint": _mask(data_key("youtube_api_key", data)),
-        "apify_token_hint": _mask(data_key("apify_token", data)),
     }
 
 
@@ -180,6 +206,8 @@ def update(changes: dict) -> None:
     data = load()
     if changes.get("ai_provider") in PROVIDERS:
         data["ai_provider"] = changes["ai_provider"]
+    if changes.get("writer_provider") is not None:
+        data["writer_provider"] = changes["writer_provider"] if changes["writer_provider"] in PROVIDERS else ""
     for key, values in (changes.get("providers") or {}).items():
         if key not in PROVIDERS:
             continue

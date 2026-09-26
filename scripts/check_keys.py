@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import llm, settings  # noqa: E402
-from app.checks import CheckError, check_apify, check_youtube  # noqa: E402
+from app.checks import CheckError, check_youtube  # noqa: E402
 
 
 async def run(name, coro):
@@ -23,7 +23,6 @@ async def main():
     ai = settings.ai_config()
     await run(f"AI", llm.test_ai(ai) if ai["ready"] else _missing(f"{ai['label']} isn't set up (key or model missing)"))
     await run("YouTube", check_youtube(settings.youtube_key()))
-    await run("Apify", check_apify(settings.apify_token()))
 
 
 async def _missing(msg):

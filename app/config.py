@@ -20,9 +20,6 @@ IMG_DIR.mkdir(exist_ok=True)
 # Claude server-side refusal fallbacks (beta). Turn off with CLAUDE_FALLBACKS=0 if your account rejects it.
 CLAUDE_FALLBACKS = os.getenv("CLAUDE_FALLBACKS", "1").strip() == "1"
 
-APIFY_TIKTOK_ACTOR = os.getenv("APIFY_TIKTOK_ACTOR", "clockworks~tiktok-scraper").strip()
-APIFY_IG_HASHTAG_ACTOR = os.getenv("APIFY_IG_HASHTAG_ACTOR", "apify~instagram-hashtag-scraper").strip()
-APIFY_IG_PROFILE_ACTOR = os.getenv("APIFY_IG_PROFILE_ACTOR", "apify~instagram-profile-scraper").strip()
 
 # Caps that keep one discovery run to a few minutes and a few dollars.
 MAX_SCORE_PER_JOB = int(os.getenv("MAX_SCORE_PER_JOB", "100"))

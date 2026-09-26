@@ -6,10 +6,11 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 async function api(path, { method = "GET", body } = {}) {
+  const raw = body instanceof Blob; // a file upload is sent as-is
   const r = await fetch(path, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : {},
-    body: body ? JSON.stringify(body) : undefined,
+    headers: body && !raw ? { "Content-Type": "application/json" } : {},
+    body: raw ? body : body ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {
     let msg = r.statusText;
@@ -172,7 +173,7 @@ function renderFilters() {
   const sources = S.meta.sources;
   renderTagPicker();
   renderMarketPicker();
-  chipSelect($("#f-platforms"), Object.entries(S.meta.platforms).map(([k, label]) => ({ value: k, label, icon: ICONS[k] })),
+  chipSelect($("#f-platforms"), Object.entries(S.meta.search_platforms).map(([k, label]) => ({ value: k, label, icon: ICONS[k] })),
     S.f.platforms, (v) => { S.f.platforms = v; searchChanged(); });
   renderSize();
   renderSuggestions();
@@ -200,12 +201,11 @@ function renderFilters() {
   const missing = [];
   if (!sources.ai) missing.push("an AI key");
   if (!sources.youtube) missing.push("a YouTube key");
-  if (!sources.tiktok) missing.push("an Apify token (TikTok + Instagram)");
   $("#setup-warning").hidden = !missing.length;
   $("#setup-warning").innerHTML = `<span>Finish setup: add ${missing.join(", ")}.</span> <button class="btn small dark" data-act="settings">Open settings</button>`;
   const scoutOk = S.meta.ai.web_search;
   $("#c-scout").disabled = !scoutOk;
-  $("#c-scout-note").textContent = scoutOk ? "" : ` Needs Claude as the AI (now: ${S.meta.ai.label}).`;
+  $("#c-scout-note").textContent = scoutOk ? "" : " Needs a Claude key in Settings (as the search or writing AI).";
 }
 
 // ---------- Size slider ----------
@@ -284,7 +284,9 @@ function renderSuggestions() {
   const list = S.company.suggested_searches || [];
   $("#suggest-strip").hidden = hidden;
   $("#show-suggest").hidden = !hidden;
-  $("#suggest-cards").innerHTML = list.map((s, i) => `
+  if (S.company.suggesting) waitForSuggestions();
+  $("#suggest-cards").innerHTML = (S.company.suggesting ? `<span class="hint"><span class="spinner"></span> ${esc(S.meta.ai.label)} is writing search ideas for ${esc(S.company.name)}…</span>` : "")
+    + list.map((s, i) => `
       <button type="button" class="sugg-card" data-sugg="${i}" title="Fill in this search">
         <b>${esc(s.title)}</b>
         <span>${esc(s.description)}</span>
@@ -294,12 +296,31 @@ function renderSuggestions() {
     + (!list.length && !S.meta.sources.ai ? `<span class="hint">Set up an AI in Settings to get suggested searches.</span>` : "");
 }
 
+// New or edited companies get their creator types and search ideas in the background: check back until they're in.
+function waitForSuggestions() {
+  if (S.suggestTimer) return;
+  const id = S.company.id;
+  S.suggestTimer = setTimeout(async () => {
+    S.suggestTimer = null;
+    if (S.company?.id !== id) return;
+    try {
+      S.companies = await api("/api/companies");
+      const fresh = S.companies.find((c) => c.id === id);
+      if (!fresh) return;
+      S.company = fresh;
+      if (!fresh.suggesting) { renderTagPicker(); renderSuggestions(); return; }
+    } catch { /* try again */ }
+    waitForSuggestions();
+  }, 4000);
+}
+
 function applySuggestion(s) {
   S.f.q = s.query || "";
   $("#q").value = S.f.q;
   S.f.tags = [...s.tags];
   S.f.markets = [...s.markets];
-  S.f.platforms = s.platforms.length === Object.keys(S.meta.platforms).length ? [] : [...s.platforms];
+  const searchable = s.platforms.filter((p) => S.meta.search_platforms[p]);
+  S.f.platforms = searchable.length === Object.keys(S.meta.search_platforms).length ? [] : searchable;
   S.f.follower_min = s.follower_min || null;
   S.f.follower_max = s.follower_max ?? null;
   renderFilters();
@@ -433,6 +454,7 @@ function cardHtml(c) {
       <span class="score ${scoreClass(c.score)}" title="Match score">${c.score}</span>
       ${c.is_new ? '<span class="ribbon">NEW</span>' : ""}
       <span class="badges">
+        ${c.partner ? `<span class="badge" title="${esc(`Worked with ${S.company.name} before${c.partner === true ? "" : ` (latest: ${c.partner})`}`)}">🤝</span>` : ""}
         ${c.hidden_gem ? '<span class="badge" title="Hidden gem: small, highly engaged and on-niche">💎</span>' : ""}
         ${starred ? `<span class="badge star" title="On your shortlist">${ICONS.starOn}</span>` : ""}
       </span>
@@ -460,7 +482,7 @@ function renderGrid(data) {
     grid.innerHTML = `
       <div class="empty">
         <h2>No creators yet for ${esc(S.company.name)}</h2>
-        <p>Pick the creator types and markets you want above, then press <b>Find new creators</b>. Scout searches YouTube, TikTok and Instagram in each market's own language and ranks small, genuinely engaged creators first.</p>
+        <p>Pick the creator types and markets you want above, then press <b>Find new creators</b>. Scout searches YouTube and TikTok in each market's own language and ranks small, genuinely engaged creators first.</p>
         <button class="btn primary big" data-act="find">${ICONS.sparkle} Find new creators</button>
       </div>`;
     $("#pager").innerHTML = "";
@@ -534,7 +556,7 @@ function barRow(label, value, hint) {
   return `<div class="barrow" title="${esc(hint)}"><span>${label}</span><div class="track"><i style="width:${value}%"></i></div><b>${value}</b></div>`;
 }
 
-function renderDetail({ card: c, creator: cr, match: m }) {
+function renderDetail({ card: c, creator: cr, match: m, linked = [], partner, agency }) {
   const dlg = $("#detail");
   const lang = S.meta.languages[m.language] || m.language || "Unknown language";
   const country = S.meta.markets[c.country]?.name || c.country || "Unknown location";
@@ -569,6 +591,7 @@ function renderDetail({ card: c, creator: cr, match: m }) {
               <span>${esc(country)}</span><span>${esc(lang)}</span>
               ${m.niche ? `<span class="pill">${esc(m.niche)}</span>` : ""}
               ${m.games?.length ? `<span class="pill">🎮 ${esc(m.games.join(", "))}</span>` : ""}
+              ${partner ? `<span class="pill partner" title="From your collaboration tracker">🤝 Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : " before"}</span>` : ""}
               ${m.hidden_gem ? '<span class="pill gem">💎 Hidden gem</span>' : ""}
               ${cr.verified ? '<span class="pill">Verified</span>' : ""}
             </div>
@@ -588,7 +611,12 @@ function renderDetail({ card: c, creator: cr, match: m }) {
         </div>
         <p class="activity">Posts ${cr.posts_per_month ?? "—"} times a month · last post ${daysAgo(cr.days_since_last_post)}${cr.views_basis === "videos, Shorts excluded" ? " · views counted on normal videos, Shorts excluded" : ""}${cr.shorts_share ? ` · ${Math.round(cr.shorts_share * 100)}% of recent uploads are Shorts` : ""}</p>
 
+        ${linked.length ? `<div class="also">${linked.map((o) => `<a href="${esc(o.url)}" target="_blank" rel="noopener" title="${esc(o.name)} ${esc(o.handle || "")}">
+          ${ICONS[o.platform]} <b>Also on ${esc(S.meta.platforms[o.platform])}</b>
+          <span>${fmtNum(o.followers)} ${o.platform === "youtube" ? "subscribers" : "followers"}${o.avg_views != null ? ` · ${fmtNum(o.avg_views)} avg views${o.views_window ? ` · ${esc(o.views_window)}` : ""}` : ""}</span></a>`).join("")}</div>` : ""}
+
         <p class="summary">${esc(m.summary)}</p>
+        ${m.ai_checked === false ? `<p class="quick-note">⚡ Quick score from their stats and post titles. The AI hasn't read their posts yet${S.meta.sources.ai ? ` <button class="btn small" data-act="ai-check" data-id="${esc(c.id)}">Check with ${esc(S.meta.ai.label)}</button>` : ""}</p>` : ""}
         <div class="tagline">${(m.tags || []).map((t) => `<span>${esc(t)}</span>`).join("")}</div>
 
         <div class="cols">
@@ -618,6 +646,7 @@ function renderDetail({ card: c, creator: cr, match: m }) {
           <div class="contact">
             ${cr.emails?.length ? cr.emails.map((e) => `<code>${esc(e)}</code><button class="btn small" data-act="copy" data-text="${esc(e)}">${ICONS.copy} Copy</button>`).join("")
               : `<span class="muted">No public email found. Message them on ${esc(S.meta.platforms[c.platform])}${cr.links?.length ? " or via their link" : ""}.</span>`}
+            ${agency ? `<span class="pill" title="A company email that isn't the creator's own, or management mentioned in their bio">Likely via agency / management</span>` : ""}
             ${Object.entries(cr.socials || {}).map(([k, l]) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS[k] || ICONS.ext} ${esc(k[0].toUpperCase() + k.slice(1))}</a>`).join("")}
             ${(cr.links || []).filter((l) => !Object.values(cr.socials || {}).includes(l)).slice(0, 3).map((l) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS.ext} ${esc(l.replace(/^https?:\/\/(www\.)?/, "").slice(0, 32))}</a>`).join("")}
           </div>
@@ -688,9 +717,9 @@ async function startFind() {
     flagRow("#crit-markets");
     return toast("Pick at least one market to search in", "err");
   }
-  const wanted = S.f.platforms.length ? S.f.platforms : Object.keys(S.meta.platforms);
+  const wanted = S.f.platforms.length ? S.f.platforms : Object.keys(S.meta.search_platforms);
   const usable = wanted.filter((p) => src[p]);
-  if (!usable.length) return toast("These platforms aren't set up yet. Add a YouTube key or Apify token in Settings.", "err");
+  if (!usable.length) return toast("YouTube isn't set up yet. Add a YouTube key in Settings, or search TikTok.", "err");
   const skipped = wanted.filter((p) => !src[p]).map((p) => S.meta.platforms[p]);
   const body = {
     ...Object.fromEntries(Object.keys(DEFAULT_SEARCH).map((k) => [k, S.f[k]])),
@@ -737,14 +766,15 @@ function renderJob() {
   const on = job.platforms.map((p) => S.meta.platforms[p]).join(", ");
   const unscored = job.unscored?.length || 0;
   const title = running ? "Scouting creators…"
-    : job.status === "done" ? `Done: ${job.new ?? 0} new creators ranked${unscored ? `, ${unscored} not scored yet` : ""}` : "Search stopped";
+    : job.status === "done" ? `Done: ${job.new ?? 0} new creators ranked${unscored ? ` (${unscored} with a quick score only)` : ""}`
+    : job.status === "stopped" ? `Stopped: ${job.new ?? 0} creators ranked before you stopped` : "Search stopped";
   el.innerHTML = `
     <div class="job-top">
-      ${running ? '<span class="spinner"></span>' : job.status === "done" ? "✅" : "⚠️"}
+      ${running ? '<span class="spinner"></span>' : job.status === "done" ? "✅" : job.status === "stopped" ? "⏹️" : "⚠️"}
       <strong>${esc(title)}</strong>
       <span class="muted">${esc(where)} · ${esc(on)}${job.tags?.length ? ` · ${esc(job.tags.join(", "))}` : ""}${job.focus ? ` · “${esc(job.focus)}”` : ""}</span>
-      ${!running && unscored ? `<button class="btn small primary" data-act="retry-scoring">Retry scoring ${unscored}</button>` : ""}
-      ${running ? "" : '<button class="btn small" data-act="dismiss-job">Dismiss</button>'}
+      ${!running && unscored && S.meta.sources.ai ? `<button class="btn small" data-act="retry-scoring" title="Let the search AI read their posts and re-score them">Check ${Math.min(unscored, S.meta.ai.local ? 10 : 40)} more with AI</button>` : ""}
+      ${running ? `<button class="btn small" data-act="stop-job">${ICONS.x} Stop</button>` : '<button class="btn small" data-act="dismiss-job">Dismiss</button>'}
     </div>
     <div class="bar"><i style="width:${jobProgress(job)}%"></i></div>
     <ol class="steps">${(job.steps || []).map((s) => `<li class="${s.status}" title="${esc(s.detail)}"><span class="dot"></span>${esc(s.label)}${s.detail ? ` <em>· ${esc(s.detail)}</em>` : ""}</li>`).join("")}</ol>
@@ -765,8 +795,8 @@ function startPolling() {
     } else {
       S.pollTimer = null;
       loadCreators();
-      if (S.job.status === "done" && S.job.unscored?.length) toast(`${S.job.new ?? 0} ranked; ${S.job.unscored.length} couldn't be scored. Press Retry scoring.`, "err");
-      else if (S.job.status === "done") toast(`${S.job.new ?? 0} new creators ranked`, "ok");
+      if (S.job.status === "done") toast(`${S.job.new ?? 0} new creators ranked`, "ok");
+      else if (S.job.status === "stopped") toast(`Search stopped. ${S.job.new ?? 0} creators were ranked before that.`);
       else toast(S.job.error || "Search failed", "err");
     }
   };
@@ -808,6 +838,10 @@ function openCompanyForm(company) {
         <label class="field"><span>What does the company do?</span>
           <textarea id="co-desc" rows="5" placeholder="e.g. Finnish marketplace for refurbished gaming PCs. Every PC is tested and comes with a warranty, and costs less than buying new. Sells across Europe.">${esc(co.description)}</textarea>
           <small>What you sell, to whom, and what makes it different. The AI uses this to suggest creator types and to judge fit.</small></label>
+        ${isNew ? "" : `<div class="field"><span>Past collaborations <em class="opt">optional</em></span>
+          <div class="partners-box" id="partners-box">${partnersHtml(co.partners)}</div>
+          <input type="file" id="partners-file" accept=".xlsx,.xlsm,.csv" hidden>
+          <small>Upload your collaboration tracker (Excel or CSV). Scout marks creators you've worked with 🤝, fills Agency and Year-week in downloads, and shows the AI what has worked for you.</small></div>`}
       </div>
       <div class="dlg-foot">
         ${isNew ? "" : '<button type="button" class="btn link danger" data-act="delete-company">Delete company</button>'}
@@ -818,7 +852,10 @@ function openCompanyForm(company) {
     </form>`;
 
   dlg.onclick = async (e) => {
-    if (e.target.closest("[data-act]")?.dataset.act !== "delete-company") return;
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (act === "partners-upload") return $("#partners-file").click();
+    if (act === "partners-remove") return removePartners(co);
+    if (act !== "delete-company") return;
     if (!confirm(`Delete ${co.name} and its creator rankings?`)) return;
     try {
       await api(`/api/companies/${co.id}`, { method: "DELETE" });
@@ -835,9 +872,7 @@ function openCompanyForm(company) {
     if (!body.description) return toast("Describe what the company does", "err");
     const btn = $("#co-save");
     btn.disabled = true;
-    if (S.meta.sources.ai && (isNew || body.description !== co.description)) {
-      btn.innerHTML = `<span class="spinner"></span> Suggesting creator types…`;
-    }
+    btn.innerHTML = `<span class="spinner"></span> Saving…`;
     try {
       const saved = isNew ? await api("/api/companies", { method: "POST", body }) : await api(`/api/companies/${co.id}`, { method: "PUT", body });
       S.companies = await api("/api/companies");
@@ -850,8 +885,47 @@ function openCompanyForm(company) {
       btn.textContent = isNew ? "Create company" : "Save";
     }
   };
+  if (!isNew) $("#partners-file").onchange = (e) => uploadPartners(co, e.target);
   dlg.showModal();
   $(isNew ? "#co-name" : "#co-desc").focus();
+}
+
+function partnersHtml(p) {
+  if (!p) return `<button type="button" class="btn small" data-act="partners-upload">Upload Excel or CSV</button>`;
+  return `<span><b>${p.count} creators</b>, ${p.collabs} collaborations · ${esc(p.file)}</span>
+    <button type="button" class="btn small" data-act="partners-upload">Replace</button>
+    <button type="button" class="btn small link danger" data-act="partners-remove">Remove</button>`;
+}
+
+async function uploadPartners(co, input) {
+  const file = input.files[0];
+  input.value = "";
+  if (!file) return;
+  const box = $("#partners-box");
+  box.innerHTML = `<span class="loading-line"><span class="spinner"></span>Reading ${esc(file.name)}…</span>`;
+  try {
+    const r = await api(`/api/companies/${co.id}/partners?filename=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+    co.partners = r.partners;
+    box.innerHTML = partnersHtml(co.partners);
+    toast(`${r.partners.count} past partners imported${r.in_library ? `, ${r.in_library} already in your results (🤝)` : ""}`, "ok");
+    S.companies = await api("/api/companies");
+    S.company = S.companies.find((x) => x.id === co.id) || S.company;
+    refresh();
+  } catch (err) {
+    box.innerHTML = partnersHtml(co.partners);
+    toast(err.message, "err");
+  }
+}
+
+async function removePartners(co) {
+  if (!confirm("Remove the imported collaboration history?")) return;
+  try {
+    await api(`/api/companies/${co.id}/partners`, { method: "DELETE" });
+    co.partners = null;
+    $("#partners-box").innerHTML = partnersHtml(null);
+    S.companies = await api("/api/companies");
+    refresh();
+  } catch (err) { toast(err.message, "err"); }
 }
 
 async function suggestTags(button) {
@@ -871,7 +945,6 @@ async function suggestTags(button) {
 // ---------- Settings (AI choice + API keys) ----------
 const DATA_KEY_LINKS = {
   youtube: "https://console.cloud.google.com/apis/library/youtube.googleapis.com",
-  apify: "https://console.apify.com/settings/integrations",
 };
 
 async function openSettings() {
@@ -879,7 +952,10 @@ async function openSettings() {
   try { st = await api("/api/settings"); } catch (e) { return toast(e.message, "err"); }
   const dlg = $("#settings");
   let provider = st.ai_provider;
+  let writer = st.writer_provider || "";
   const drafts = {}; // unsaved edits per provider, so switching back and forth keeps what was typed
+  let local = null;  // /api/local-ai: this computer, the recommended model, Ollama status, download
+  let localTimer = null;
 
   dlg.innerHTML = `
     <form id="settings-form" autocomplete="off">
@@ -889,15 +965,20 @@ async function openSettings() {
       </div>
       <div class="dlg-body">
         <section class="set-section">
-          <h3>AI</h3>
-          <p class="muted small">Plans the searches, scores creators and writes messages. Pick any one.</p>
+          <h3>Search AI</h3>
+          <p class="muted small">Plans searches and checks creators, many times per search. <b>Local AI</b> runs on this computer for free.</p>
           <div class="provider-grid" id="ai-providers"></div>
           <div id="ai-fields" class="ai-fields"></div>
         </section>
         <section class="set-section">
+          <h3>Writing AI</h3>
+          <p class="muted small">Only used when you click <i>Draft a message</i>, or turn on the AI web scout. A paid AI writes better Finnish or German, and costs cents per message.</p>
+          <select id="writer-provider" class="model-select" aria-label="Writing AI"></select>
+        </section>
+        <section class="set-section">
           <h3>Data sources</h3>
           ${dataKeyField("youtube", "YouTube API key", st.youtube_key_hint, "Free: Google Cloud console → enable YouTube Data API v3 → Credentials → Create API key.")}
-          ${dataKeyField("apify", "Apify token (TikTok + Instagram)", st.apify_token_hint, "Free plan includes $5/month: console.apify.com → Settings → API & Integrations.")}
+          <p class="note">TikTok needs no key: Scout reads TikTok's public pages itself.</p>
         </section>
       </div>
       <div class="dlg-foot">
@@ -924,7 +1005,7 @@ async function openSettings() {
     drafts[provider] = {
       api_key: $("#ai-key")?.value.trim() || "",
       model: model === "__custom__" ? "" : model,
-      base_url: $("#ai-url")?.value.trim() ?? null,
+      base_url: $("#ai-url")?.value.trim() ?? drafts[provider]?.base_url ?? null,
       workspace_id: $("#ai-workspace")?.value.trim() ?? null,
       clear_key: drafts[provider]?.clear_key || false,
     };
@@ -942,8 +1023,82 @@ async function openSettings() {
       placeholder="${esc(p.default_model || "Press Load models, then pick one")}">`;
   };
 
+  const renderWriter = () => {
+    const opts = Object.entries(st.providers).filter(([k, p]) => !p.local && (p.key_hint || k === writer));
+    $("#writer-provider").innerHTML = `<option value="">Same as the search AI (${esc(st.providers[provider].label)})</option>`
+      + opts.map(([k, p]) => `<option value="${k}" ${k === writer ? "selected" : ""}>${esc(p.label)}${p.model ? ` (${esc(p.model)})` : ""}</option>`).join("")
+      + (opts.length ? "" : `<option disabled>Add a Claude, OpenAI or Gemini key above to use it here</option>`);
+  };
+
+  const gb = (bytes) => (bytes / 1024 ** 3).toFixed(1);
+  const localHtml = () => {
+    if (!local) return `<div class="loading-line"><span class="spinner"></span>Looking at this computer…</div>`;
+    const { hardware: hw, recommended: rec, ollama, pull } = local;
+    const gpu = hw.dedicated_gpu ? `${esc(hw.dedicated_gpu.name)}${hw.dedicated_gpu.vram_gb ? ` (${hw.dedicated_gpu.vram_gb} GB)` : ""}`
+      : `${hw.gpus[0] ? esc(hw.gpus[0].name) + ", " : ""}no dedicated graphics card`;
+    const have = ollama.models.map((m) => m.name);
+    const d = drafts[provider] || {};
+    const current = d.model ?? st.providers.ollama.model;
+    const pulling = pull && !pull.done;
+    let status = "";
+    if (!ollama.installed) {
+      status = `<p class="note">Local AI needs <b>Ollama</b> (free). Install it, then reopen Settings.
+        <a class="btn small" href="https://ollama.com/download" target="_blank" rel="noopener">${ICONS.ext} Get Ollama</a></p>`;
+    } else if (!ollama.running) {
+      status = `<p class="note">Ollama is installed but not running. <button type="button" class="btn small" data-act="start-ollama">Start it</button></p>`;
+    }
+    const recBox = `<div class="rec">
+        <div><b>Recommended for this computer: ${esc(rec.model)}</b> <span class="muted">· ${rec.size_gb} GB</span>
+          <small>${esc(rec.note)}. Why: ${esc(rec.why)}.</small></div>
+        ${have.includes(rec.model) ? `<span class="pill partner">✓ Downloaded</span>`
+          : pulling ? "" : `<button type="button" class="btn small primary" data-act="pull" data-model="${esc(rec.model)}" ${ollama.running && rec.fits_disk ? "" : "disabled"}>Download</button>`}
+      </div>
+      ${rec.fits_disk ? "" : `<p class="note bad">Not enough free disk space (${hw.free_disk_gb} GB free).</p>`}`;
+    const progress = pull ? (pull.error ? `<p class="test-msg bad">✗ ${esc(pull.error)}</p>`
+      : pull.done ? "" : `<div class="pull"><div class="bar"><i style="width:${pull.total ? Math.round(pull.completed / pull.total * 100) : 2}%"></i></div>
+        <small>Downloading ${esc(pull.model)}: ${pull.total ? `${gb(pull.completed)} of ${gb(pull.total)} GB` : esc(pull.status || "starting")}. You can keep using Scout.</small></div>`) : "";
+    const others = local.catalog.filter((m) => m.model !== rec.model).map((m) => `
+      <li><span><b>${esc(m.model)}</b> · ${m.size_gb} GB · ${esc(m.note)}</span>
+        ${have.includes(m.model) ? '<span class="muted">downloaded</span>' : `<button type="button" class="btn small" data-act="pull" data-model="${esc(m.model)}" ${ollama.running && !pulling ? "" : "disabled"}>Download</button>`}</li>`).join("");
+    return `
+      <p class="hw">This computer: <b>${hw.ram_gb ?? "?"} GB</b> memory · ${gpu} · ${hw.cpu_threads} processor threads</p>
+      ${status}${recBox}${progress}
+      ${have.length ? `<div class="field"><span>Model to use</span>
+        <select id="ai-model" class="model-select">${have.map((m) => `<option value="${esc(m)}" ${m === current ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></div>` : ""}
+      <details class="other-models"><summary>Other sizes</summary><ul>${others}</ul></details>`;
+  };
+
+  const refreshLocal = async () => {
+    clearTimeout(localTimer);
+    if (provider === "ollama") readFields(); // keep a model the user just picked
+    try { local = await api("/api/local-ai"); } catch (err) { toast(err.message, "err"); return; }
+    const have = local.ollama.models.map((m) => m.name);
+    const d = drafts.ollama || {};
+    const current = d.model || st.providers.ollama.model;
+    // A fresh download (or a saved model that isn't there any more) -> the recommended one if we have it.
+    if (!have.includes(current) && have.length) {
+      drafts.ollama = { ...d, model: have.includes(local.recommended.model) ? local.recommended.model : have[0] };
+    }
+    if (provider === "ollama" && $("#local-ai")) $("#local-ai").innerHTML = localHtml();
+    if (local.pull && !local.pull.done && dlg.open) localTimer = setTimeout(refreshLocal, 1500);
+    else if (local.pull?.done && !local.pull.error && local.pull.model && !local._announced) {
+      local._announced = true;
+      toast(`${local.pull.model} is ready`, "ok");
+    }
+  };
+
   const renderFields = () => {
     const p = st.providers[provider];
+    renderWriter();
+    if (p.local) {
+      $("#ai-fields").innerHTML = `<div id="local-ai" class="local-ai">${localHtml()}</div>
+        <div class="test-row">
+          <button type="button" class="btn small" data-act="test-ai">Test ${esc(p.label)}</button>
+          <span class="test-msg" id="ai-test-msg"></span>
+        </div>`;
+      if (!local) refreshLocal();
+      return;
+    }
     const d = drafts[provider] || {};
     let model = d.model ?? p.model;
     const l = loaded[provider];
@@ -975,7 +1130,7 @@ async function openSettings() {
         <button type="button" class="btn small" data-act="test-ai">Test ${esc(p.label)}</button>
         <span class="test-msg" id="ai-test-msg"></span>
       </div>
-      ${p.web_search ? "" : `<p class="note">Everything works with ${esc(p.label)}. Only the optional "AI web scout" needs Claude.</p>`}`;
+      ${p.web_search ? `<p class="note">Claude costs money per search. Cheaper: use the Local AI for searches and Claude only as the writing AI below.</p>` : ""}`;
     // A key is already saved: fetch the model list right away so a retired default gets replaced.
     if (!l && !autoTried[provider] && p.needs_key && (p.key_hint || d.api_key) && !d.clear_key) {
       autoTried[provider] = true;
@@ -1039,6 +1194,7 @@ async function openSettings() {
       delete loaded[provider];
       return loadModels({ thenTest: true });
     }
+    if (e.target.id === "writer-provider") { writer = e.target.value; return; }
     if (e.target.id === "ai-model" && e.target.value === "__custom__") {
       readFields();
       loaded[provider].manual = true;
@@ -1074,7 +1230,18 @@ async function openSettings() {
     }
     const act = e.target.closest("[data-act]")?.dataset.act;
     const btn = e.target.closest("button");
-    if (act === "clear-ai-key") {
+    if (act === "pull") {
+      btn.disabled = true;
+      try {
+        await api("/api/local-ai/pull", { method: "POST", body: { model: btn.dataset.model } });
+        await refreshLocal();
+      } catch (err) { toast(err.message, "err"); btn.disabled = false; }
+    } else if (act === "start-ollama") {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Starting…';
+      try { await api("/api/local-ai/start", { method: "POST" }); await refreshLocal(); }
+      catch (err) { toast(err.message, "err"); btn.disabled = false; btn.textContent = "Start it"; }
+    } else if (act === "clear-ai-key") {
       readFields();
       drafts[provider] = { ...drafts[provider], clear_key: true, api_key: "" };
       renderFields();
@@ -1086,12 +1253,12 @@ async function openSettings() {
       if (b) b.disabled = false;
     } else if (act === "test-ai") {
       await runTest();
-    } else if (act === "test-youtube" || act === "test-apify") {
+    } else if (act === "test-youtube") {
       const which = act.slice(5);
       btn.disabled = true;
       const msg = $(`#${which}-msg`);
       msg.className = "test-msg"; msg.textContent = "Testing…";
-      const body = { target: which, youtube_api_key: $("#youtube-key").value.trim() || null, apify_token: $("#apify-key").value.trim() || null };
+      const body = { target: which, youtube_api_key: $("#youtube-key").value.trim() || null };
       try { showResult(msg, await api("/api/settings/test", { method: "POST", body })); }
       catch (err) { showResult(msg, { ok: false, message: err.message }); }
       finally { btn.disabled = false; }
@@ -1103,22 +1270,23 @@ async function openSettings() {
     readFields();
     const body = {
       ai_provider: provider,
+      writer_provider: writer,
       providers: Object.fromEntries(Object.entries(drafts).map(([k, d]) => [k, {
         api_key: d.api_key || null, model: d.model ?? null, base_url: d.base_url ?? null, clear_key: !!d.clear_key,
         workspace_id: d.workspace_id ?? null,
       }])),
       youtube_api_key: $("#youtube-key").value.trim() || null,
-      apify_token: $("#apify-key").value.trim() || null,
     };
     try {
       await api("/api/settings", { method: "PUT", body });
       S.meta = await api("/api/meta");
       renderFilters();
       dlg.close();
-      toast(S.meta.ai.ready ? `Saved. Using ${S.meta.ai.label} (${S.meta.ai.model}).` : "Saved", "ok");
+      toast(S.meta.ai.ready ? `Saved. Searches use ${S.meta.ai.label} (${S.meta.ai.model}); messages use ${S.meta.ai.writer.label}.` : "Saved", "ok");
     } catch (err) { toast(err.message, "err"); }
   };
 
+  dlg.addEventListener("close", () => clearTimeout(localTimer), { once: true });
   renderProviders();
   renderFields();
   dlg.showModal();
@@ -1305,6 +1473,12 @@ function bindEvents() {
     else if (act === "new-company") { toggleCompanyMenu(false); openCompanyForm(null); }
     else if (act === "edit-company") { toggleCompanyMenu(false); openCompanyForm(S.company); }
     else if (act === "dismiss-job") { S.job = null; renderJob(); }
+    else if (act === "stop-job") {
+      actEl.disabled = true;
+      actEl.innerHTML = '<span class="spinner"></span> Stopping…';
+      try { S.job = await api(`/api/jobs/${S.job.id}/stop`, { method: "POST" }); renderJob(); }
+      catch (err) { toast(err.message, "err"); actEl.disabled = false; }
+    }
     else if (act === "show-all") { S.viewJob = null; S.page = 1; loadCreators(); }
     else if (act === "more-suggestions") moreSuggestions(actEl);
     else if (act === "hide-suggestions" || act === "show-suggestions") {
@@ -1321,6 +1495,15 @@ function bindEvents() {
       } catch (err) { toast(err.message, "err"); actEl.disabled = false; }
     }
     else if (act === "pitch") draftPitch(actEl.dataset.id, actEl);
+    else if (act === "ai-check") {
+      actEl.disabled = true;
+      actEl.innerHTML = `<span class="spinner"></span> ${esc(S.meta.ai.label)} is reading their posts…`;
+      try {
+        await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(actEl.dataset.id)}/ai-check`, { method: "POST" });
+        renderDetail(await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(actEl.dataset.id)}`));
+        loadCreators({ quiet: true });
+      } catch (err) { toast(err.message, "err"); actEl.disabled = false; actEl.textContent = "Try again"; }
+    }
     else if (act === "copy") { await navigator.clipboard.writeText(actEl.dataset.text); toast("Copied"); }
     else if (act === "copy-pitch") { await navigator.clipboard.writeText($("#pitch-text").value); toast("Message copied"); }
     else if (act === "toggle-english" && S.pitch) {

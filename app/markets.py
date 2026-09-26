@@ -6,6 +6,8 @@ MARKETS = {
     "NO": {"name": "Norway", "languages": ["no"]},
     "DK": {"name": "Denmark", "languages": ["da"]},
     "EE": {"name": "Estonia", "languages": ["et"]},
+    "LV": {"name": "Latvia", "languages": ["lv"]},
+    "LT": {"name": "Lithuania", "languages": ["lt"]},
     "DE": {"name": "Germany", "languages": ["de"]},
     "AT": {"name": "Austria", "languages": ["de"]},
     "CH": {"name": "Switzerland", "languages": ["de", "fr"]},
@@ -17,6 +19,7 @@ MARKETS = {
     "PT": {"name": "Portugal", "languages": ["pt"]},
     "PL": {"name": "Poland", "languages": ["pl"]},
     "CZ": {"name": "Czechia", "languages": ["cs"]},
+    "HU": {"name": "Hungary", "languages": ["hu"]},
     "GB": {"name": "United Kingdom", "languages": ["en"]},
     "IE": {"name": "Ireland", "languages": ["en"]},
     "US": {"name": "United States", "languages": ["en"]},
@@ -24,11 +27,14 @@ MARKETS = {
 
 LANGUAGES = {
     "fi": "Finnish", "sv": "Swedish", "no": "Norwegian", "da": "Danish", "et": "Estonian",
+    "lv": "Latvian", "lt": "Lithuanian", "hu": "Hungarian",
     "de": "German", "nl": "Dutch", "fr": "French", "es": "Spanish", "it": "Italian",
     "pt": "Portuguese", "pl": "Polish", "cs": "Czech", "en": "English",
 }
 
 PLATFORMS = {"youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram"}
+# What a search can cover. Instagram only shows up as a linked profile (contact details, export).
+SEARCH_PLATFORMS = {"youtube": "YouTube", "tiktok": "TikTok"}
 
 # (key, min followers, max followers, label)
 TIERS = [

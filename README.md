@@ -5,19 +5,41 @@ Scout automates influencer discovery for brands like Prenew, with a focus on mic
 
 **How it works (one search):**
 
-1. **Plan.** Claude turns the company brief into search terms and hashtags in each market's own language
+1. **Plan.** The AI turns the company brief into search terms and hashtags in each market's own language
    (for example Finnish slang for Finland, German for Germany). This is how it works for small markets too.
-2. **Source.** YouTube (official Data API), TikTok and Instagram (Apify scrapers) are searched in parallel.
+   Plans are remembered, so repeating a search needs no AI; with no AI at all, templates are used.
+2. **Source.** YouTube (official Data API) and TikTok (Scout's own scraper, free, no key) are searched in
+   parallel. TikTok's own search needs a login and shows a CAPTCHA to
+   automated browsers, so Scout finds TikTok accounts through web search (Bing, Yahoo, DuckDuckGo) with the
+   local-language queries, reads each account's public profile, latest videos and a few video pages
+   (views, likes, comments, and the country and language TikTok detected), then follows the @mentions
+   in those videos to other local creators.
    An optional **AI web scout** lets Claude search forums, local creator lists and press for creators that
-   hashtags miss.
+   hashtags miss. It's off by default: it runs paid web searches (about $1–3 per market).
 3. **Filter.** Keeps only creators inside the follower range who posted in the last 4 months, then ranks them
    by engagement *relative to accounts of the same size* (a 5k account with 8% engagement beats a 200k account with 1%).
-4. **Score.** Claude reads each creator's bio and recent posts and scores niche fit, market fit and brand safety,
-   with a one-line summary, tags, reasons and red flags. The final **match score** is
-   40% niche + 20% market + 25% engagement + 10% activity + 5% safety.
+4. **Score, in two steps.** First a **quick score** for everyone, free and instant, from rules: the games
+   and niche in their post titles, the country and language the platform reports, gambling flags, engagement
+   and activity. Then the **search AI** reads the posts of the most promising ones (12 per search on a local
+   model, 40 on a cloud AI) and re-scores niche fit, market fit and brand safety, with a one-line summary,
+   reasons, red flags and competitor sponsorships. *Check more with AI* does the next ones. The final **match score** is
+   40% niche + 20% market + 25% engagement + 10% activity + 5% safety, minus 15 each for a competitor
+   sponsorship, brand-safety concerns or content unrelated to the niche.
    Small, highly engaged, on-niche creators get a 💎 **Hidden gem** badge.
 5. **Act.** Shortlist, see contact details, and download **Excel or CSV** of any result set
    (plus an optional drafted first message in the creator's language).
+
+**Downloads use Prenew's own tracker layout.** The first 12 columns match their collaboration sheet exactly
+(Creator key, Market, Country, Creator / channel, Agency, Year-week, Platform, Niche / content,
+YT subscribers, YT views / video, TikTok followers, TikTok views / video), so rows paste straight in.
+One row per creator: when a YouTube channel links to its TikTok (or the other way round), Scout fetches the
+other profile after the search and puts both platforms' numbers side by side. *Agency* is a guess from the
+contact details (a company email that isn't the creator's own, or management in the bio). Contacts, links,
+match score, risks and trend follow in extra columns; a second sheet explains every column.
+
+**Past collaborations.** In *Edit company*, upload the collaboration tracker (Excel or CSV). Scout then
+marks creators you've already worked with 🤝, fills *Agency* and *Year-week* for them in downloads, and
+shows the AI the past partners as examples of what fits (niche, size, market, platform).
 
 **Data per creator (what Prenew asked for):** country · subscribers/followers · **average views over the last
 30 days** (90 days for less active creators; YouTube Shorts and posts under 2 days old are left out) ·
@@ -42,11 +64,14 @@ the saved creators instantly and drive *Find new creators*, and they're remember
    ```
 
 2. Click the **gear (Settings)** and set up:
-   - **AI** (pick one): Claude, OpenAI, Gemini, OpenRouter, Ollama (local and free), or any OpenAI-compatible
-     API. Paste its key, press *Load models* and pick one, then *Test*. The optional *AI web scout* needs Claude;
-     everything else works with any of them.
+   - **Search AI** (runs many times per search): **Local AI** is free and runs on this computer through
+     [Ollama](https://ollama.com/download). Scout looks at the computer (memory, graphics card), recommends a
+     model (for example `qwen3.5:4b` on a laptop without a graphics card) and downloads it with one button.
+     Claude, OpenAI, Gemini, OpenRouter or any OpenAI-compatible API work too, but cost money per search.
+   - **Writing AI** (optional, only when you click): drafts outreach messages in the creator's language and
+     runs the AI web scout. A paid AI like Claude writes better Finnish or German; a message costs about a cent.
    - **YouTube**: Google Cloud console, then enable *YouTube Data API v3*, then Credentials, then *Create API key* (free, 10k units/day)
-   - **Apify** (TikTok + Instagram): sign up at https://apify.com, then Settings, then *API & Integrations* (free plan includes $5/month)
+   - **TikTok** needs nothing: Scout scrapes TikTok's public pages itself.
 
    Changes apply immediately. Keys are stored in `data/settings.json` on this computer.
 
@@ -58,14 +83,15 @@ the saved creators instantly and drive *Find new creators*, and they're remember
 
 Check everything from the command line with `.venv/Scripts/python scripts/check_keys.py`.
 
-## Cost and limits for one search (2 markets, 3 platforms)
+## Cost and limits for one search (2 markets, YouTube + TikTok)
 
 - YouTube: about 1,000 of the 10,000 free daily quota units (4 searches of 100 units per market + cheap channel/video calls)
-- Apify: at most about 800 scraped results, capped with `maxItems` (about $1.50–2.00 on the free plan, so the free $5
-  covers 2–3 full searches; test with one market and one platform)
-- AI: search planning + about 8 scoring calls for up to 60 creators (cheap models like Gemini Flash or
-  GPT mini cost cents; free tiers can hit rate limits, which the app retries)
-- Time: 2–4 minutes. Cards appear as batches finish scoring.
+- TikTok: free. About 1 minute per market (web searches, then a few public TikTok pages per creator, 4 at a time).
+- AI: **nothing with the Local AI.** On a laptop CPU the AI check takes about 1–2 minutes per 4 creators;
+  quick scores appear at once, so the grid fills before the AI is done. A cloud AI is faster but costs per
+  search. Claude is only called when you draft a message or turn on the web scout.
+- Time: 2–4 minutes to quick scores, plus the AI check. **Stop** ends a search early and keeps what was
+  already ranked.
 
 ## Demo flow (5 minutes)
 
@@ -77,7 +103,7 @@ Check everything from the command line with `.venv/Scripts/python scripts/check_
 5. **Live search (1m).** Pick YouTube + Finland and press *Find new creators*. Show the local-language plan and
    progress, with cards landing as NEW.
 6. **Another company (30s).** *Add a company* with just a description; Claude suggests creator types for it.
-7. **Shortlist + CSV (30s).** Plugs straight into an existing outreach workflow.
+7. **Shortlist + Excel (30s).** Same columns as Prenew's own collaboration tracker, YouTube and TikTok in one row.
 
 Run a full Prenew search (Finland + Germany, all platforms) **before** the pitch so the library is full.
 
@@ -86,10 +112,15 @@ Run a full Prenew search (Finland + Germany, all platforms) **before** the pitch
 ```
 app/main.py        HTTP API + serves the UI
 app/pipeline.py    one discovery run: plan, source, filter, score
-app/llm.py         AI prompts (planning, scoring, pitch, tags, web scout); Claude SDK or any OpenAI-compatible API
+app/llm.py         AI prompts (planning, scoring, pitch, tags, web scout); local models (Ollama), Claude SDK or any OpenAI-compatible API
+app/rules.py       free quick scores without AI (games, niche, market, safety) and search templates
+app/localai.py     looks at this computer, recommends a local model and downloads it through Ollama
 app/settings.py    Settings screen storage: chosen AI, keys (data/settings.json, .env fallback)
-app/metrics.py     engagement vs size-typical benchmarks, activity, email extraction
-app/sources/       youtube.py (Data API), tiktok.py + instagram.py (Apify)
+app/metrics.py     engagement vs size-typical benchmarks, activity, email extraction, agency guess
+app/export.py      Excel/CSV downloads in Prenew's tracker layout (one row per creator)
+app/linking.py     links one person's YouTube/TikTok/Instagram profiles (only when one links to the other)
+app/partners.py    imports a collaboration tracker; flags past partners
+app/sources/       youtube.py (Data API), tiktok.py (own scraper) + websearch.py
 app/store.py       JSON-file database (data/db.json)
 static/            the UI (plain HTML/CSS/JS, no build step)
 scripts/dev_fixture.py   SAMPLE data for UI work without keys (data-dev/, never demo it)

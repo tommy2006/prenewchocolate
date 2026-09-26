@@ -11,8 +11,8 @@ import re
 import anthropic
 import httpx
 
-from . import config, settings
-from .markets import LANGUAGES, MARKETS, PLATFORMS
+from . import config, partners, settings
+from .markets import LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS
 
 log = logging.getLogger("scout")
 
@@ -234,6 +234,51 @@ async def _json_openai(ai, system, user, schema, max_tokens, patient: bool = Tru
     raise LLMError(f"{ai['label']} couldn't produce the answer: {problem}")
 
 
+# --- Local models (Ollama's own API) ----------------------------------------------------------
+
+def ollama_base(ai: dict) -> str:
+    return (ai.get("base_url") or "http://localhost:11434").rstrip("/").removesuffix("/v1")
+
+
+async def _json_ollama(ai, system, user, schema, max_tokens) -> dict:
+    """Ollama's native chat API: `format` constrains the output to the JSON schema (no parsing surprises)
+    and `think: false` skips the long hidden reasoning some small models do by default."""
+    body = {
+        "model": ai["model"],
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "stream": False,
+        "format": schema,
+        "think": False,
+        "keep_alive": "30m",  # stay loaded between batches; loading takes longer than answering
+        "options": {"temperature": 0.2, "num_ctx": 8192, "num_predict": min(max_tokens, ai["max_tokens"])},
+    }
+    url = ollama_base(ai) + "/api/chat"
+    async with httpx.AsyncClient(timeout=httpx.Timeout(900, connect=5)) as http:
+        for _ in range(2):
+            try:
+                r = await http.post(url, json=body)
+            except httpx.ConnectError as e:
+                raise LLMError("The local AI isn't running. Start the Ollama app (or press Start in Settings → Local AI).") from e
+            except httpx.TimeoutException as e:
+                raise LLMError("The local AI took too long to answer") from e
+            if r.status_code == 400 and "think" in r.text.lower() and "think" in body:
+                body.pop("think")  # this model has no thinking switch
+                continue
+            break
+    if r.status_code == 404:
+        raise LLMError(f"The local model '{ai['model']}' isn't downloaded yet. Open Settings → Local AI and press Download.")
+    if r.status_code >= 400:
+        raise LLMError(f"Local AI error {r.status_code}: {_error_detail(r)}")
+    try:
+        data = _parse_json(r.json()["message"]["content"])
+    except (ValueError, KeyError, TypeError) as e:
+        raise LLMError(f"The local AI's answer wasn't valid JSON ({e})") from e
+    missing = [k for k in schema.get("required", []) if k not in data]
+    if missing:
+        raise LLMError(f"The local AI's answer was missing {', '.join(missing)}")
+    return data
+
+
 # provider -> model that replaced the configured one after quota/overload errors (until Settings change)
 model_overrides: dict[str, dict] = {}
 
@@ -253,6 +298,8 @@ async def _json(system: str, user: str, schema: dict, effort: str = "medium", ma
         raise LLMError("No AI is set up yet. Open Settings and add a key for the AI you want to use.")
     if ai["kind"] == "anthropic":
         return await _json_claude(ai, system, user, schema, effort, max_tokens)
+    if ai["kind"] == "ollama":
+        return await _json_ollama(ai, system, user, schema, max_tokens)
     # Try the configured model (or the one that already replaced it), then lighter ones from the same provider.
     # Gemini quotas are per model, so a used-up quota on one model often leaves the next one working.
     chain = [ai["model"]] + ai.get("fallback_models", [])
@@ -283,6 +330,8 @@ async def test_ai(ai: dict) -> str:
             _obj({"ok": BOOL, "model": STR}))
     if ai["kind"] == "anthropic":
         data = await _json(*args, effort="low", max_tokens=1000, ai=ai)
+    elif ai["kind"] == "ollama":
+        data = await _json_ollama(ai, *args, max_tokens=200)
     else:
         data = await _json_openai(ai, *args, max_tokens=1000)
     if not data.get("ok"):
@@ -327,6 +376,13 @@ async def list_models(ai: dict) -> list[str]:
             raise LLMError("Claude rejected the API key. Check it in Settings.") from e
         except anthropic.APIError as e:
             raise LLMError(f"Couldn't list Claude models: {e}") from e
+    if ai["kind"] == "ollama":
+        try:
+            async with httpx.AsyncClient(timeout=10) as http:
+                r = await http.get(ollama_base(ai) + "/api/tags")
+        except httpx.HTTPError as e:
+            raise LLMError("The local AI (Ollama) isn't running. Start the Ollama app.") from e
+        return sorted(m["name"] for m in r.json().get("models", []) if "embed" not in m["name"])
     headers = {"Authorization": f"Bearer {ai['api_key']}"} if ai["api_key"] else {}
     try:
         async with httpx.AsyncClient(timeout=20) as http:
@@ -350,7 +406,7 @@ BOOL = {"type": "boolean"}
 STR_LIST = {"type": "array", "items": STR}
 
 
-def brand_block(company: dict, search: dict) -> str:
+def brand_block(company: dict, search: dict, past_limit: int = 30) -> str:
     """The company (from its profile) plus what this particular search asks for (from the search area)."""
     markets = ", ".join(f"{MARKETS[m]['name']} ({m})" for m in search.get("markets", []) if m in MARKETS)
     fmax = search.get("follower_max")
@@ -370,6 +426,15 @@ def brand_block(company: dict, search: dict) -> str:
     if search.get("example_creators"):
         lines.append(f"Example creators they like: {', '.join(search['example_creators'])}")
     lines.append("</search>")
+    past = partners.brief(company, limit=past_limit)
+    if past:
+        lines += [
+            "<past_collaborations>",
+            "Creators this brand has already worked with. Treat them as examples of what fits "
+            "(niches, sizes, markets, platforms); the goal is new creators like them.",
+            past,
+            "</past_collaborations>",
+        ]
     return "\n".join(lines)
 
 
@@ -387,7 +452,6 @@ PLAN_SCHEMA = _obj({
         "youtube_queries": STR_LIST,
         "tiktok_queries": STR_LIST,
         "tiktok_hashtags": STR_LIST,
-        "instagram_hashtags": STR_LIST,
     })},
 })
 
@@ -402,16 +466,16 @@ async def plan_searches(company: dict, search: dict, platforms: list[str]) -> li
     if "youtube" in platforms:
         wanted.append("youtube_queries: 4 video search queries")
     if "tiktok" in platforms:
-        wanted.append("tiktok_queries: 2 search queries; tiktok_hashtags: 2 hashtags")
-    if "instagram" in platforms:
-        wanted.append("instagram_hashtags: 3 hashtags")
+        # These go through web search ("site:tiktok.com fortnite suomi"): short phrases find the most accounts.
+        wanted.append("tiktok_queries: 4 short phrases of 2-3 words, each a game or topic plus one local-language "
+                      "word (e.g. 'fortnite suomi', 'minecraft pelaaja'); tiktok_hashtags: 2 hashtags")
     user = (
         f"{brand_block(company, search)}\n\n"
         f"Markets:\n{market_lines}\n\n"
         f"Per market, return: {'; '.join(wanted)}. Cover the different creator types wanted rather than repeating one."
     )
     data = await _json(PLAN_SYSTEM, user, PLAN_SCHEMA)
-    keys = ("youtube_queries", "tiktok_queries", "tiktok_hashtags", "instagram_hashtags")
+    keys = ("youtube_queries", "tiktok_queries", "tiktok_hashtags")
     plans = []
     for m in data["markets"]:
         if isinstance(m, dict) and m.get("market") in markets:
@@ -463,15 +527,18 @@ SCORE_SCHEMA = _obj({
 })
 
 
-def _compact(c: dict) -> dict:
+def _compact(c: dict, lite: bool = False) -> dict:
+    """What the AI sees about a creator. `lite` (local models) sends fewer, shorter posts: on a laptop CPU
+    every input token costs time."""
     er = c.get("engagement_rate")
+    n_posts, text_len, bio_len = (6, 90, 300) if lite else (10, 150, 600)
     return {
         "id": c["id"],
         "platform": PLATFORMS[c["platform"]],
         "name": c.get("name"),
         "handle": c.get("handle"),
         "followers": c.get("followers"),
-        "bio": (c.get("bio") or "")[:600],
+        "bio": (c.get("bio") or "")[:bio_len],
         "category": c.get("category"),
         "stated_country": c.get("country") or None,
         "stated_language": c.get("language") or None,
@@ -483,17 +550,63 @@ def _compact(c: dict) -> dict:
         "posts_per_month": c.get("posts_per_month"),
         "days_since_last_post": c.get("days_since_last_post"),
         "recent_posts": [
-            {"text": (p.get("title") or "")[:150], "views": p.get("views"), "likes": p.get("likes"),
+            {"text": (p.get("title") or "")[:text_len], "views": p.get("views"), "likes": p.get("likes"),
              "comments": p.get("comments"), **({"short": True} if p.get("is_short") else {})}
-            for p in c.get("recent_posts", [])[:10]  # enough titles to tell which games they play
+            for p in c.get("recent_posts", [])[:n_posts]  # enough titles to tell which games they play
         ],
     }
 
 
-async def score_batch(company: dict, search: dict, creators: list[dict]) -> dict[str, dict]:
+# Local models on a laptop CPU write ~5 tokens a second, so they answer only what the rules can't know
+# (fit, safety, competitors, a summary) and read only titles and bio. Tags, language and stats come from rules.
+LOCAL_SCORE_SYSTEM = """You judge whether social media creators fit one brand's influencer program. For each creator, from their bio and post titles only:
+- niche_fit 0-100: how well their content matches the creator types wanted (90+ core niche, 60-80 adjacent, under 40 unrelated).
+- market_fit 0-100: how likely their audience is in the target markets, from the language of their posts and their country (90+ clearly local, 50 unclear, under 30 elsewhere).
+- brand_safety 0-100: 100 unless gambling, skin betting, adult content, hate or big controversy.
+- niche: 1-3 words. games: titles of the games they mainly cover (can be empty).
+- summary: at most 90 characters, in English: who they are and why they matter (or don't) for this brand.
+- red_flags: short concerns, or an empty list.
+- competitor_sponsor: true if the account IS a company selling the same kind of products as the brand (a shop, retailer or manufacturer), or is sponsored by one. Such accounts are competitors, not partners: give them niche_fit under 30.
+Judge only from the data given."""
+
+LOCAL_SCORE_SCHEMA = _obj({
+    "results": {"type": "array", "items": _obj({
+        "id": STR,
+        "niche_fit": INT,
+        "market_fit": INT,
+        "brand_safety": INT,
+        "niche": STR,
+        "games": STR_LIST,
+        "summary": STR,
+        "red_flags": STR_LIST,
+        "competitor_sponsor": BOOL,
+    })},
+})
+
+
+def _compact_local(c: dict) -> dict:
+    return {
+        "id": c["id"],
+        "platform": PLATFORMS[c["platform"]],
+        "name": c.get("name"),
+        "followers": c.get("followers"),
+        "country": c.get("country") or None,
+        "language": c.get("language") or None,
+        "bio": (c.get("bio") or "")[:200],
+        "posts": [(p.get("title") or "")[:80] for p in c.get("recent_posts", [])[:6]],
+    }
+
+
+async def score_batch(company: dict, search: dict, creators: list[dict], ai: dict | None = None) -> dict[str, dict]:
+    ai = ai or settings.ai_config()
+    if ai["local"]:
+        system = LOCAL_SCORE_SYSTEM + "\n\n" + brand_block(company, search, past_limit=12)
+        user = "Creators:\n" + json.dumps([_compact_local(c) for c in creators], ensure_ascii=False)
+        data = await _json(system, user, LOCAL_SCORE_SCHEMA, ai=ai, max_tokens=140 * len(creators) + 100)
+        return {r["id"]: r for r in data["results"] if isinstance(r, dict) and r.get("id")}
     system = SCORE_SYSTEM + "\n\n" + brand_block(company, search)
-    user = "Creators to evaluate:\n" + json.dumps([_compact(c) for c in creators], ensure_ascii=False)
-    data = await _json(system, user, SCORE_SCHEMA)
+    user = "Creators to evaluate:\n" + json.dumps([_compact(c, lite=ai["local"]) for c in creators], ensure_ascii=False)
+    data = await _json(system, user, SCORE_SCHEMA, ai=ai, max_tokens=700 * len(creators) + 300)
     defaults = {"niche_fit": 0, "market_fit": 50, "brand_safety": 100, "language": "", "country": "", "summary": "",
                 "niche": "", "games": [],
                 "tags": [], "matched_tags": [], "why": [], "red_flags": [], "competitor_sponsor": False}
@@ -517,7 +630,8 @@ async def draft_pitch(company: dict, search: dict, creator: dict, match: dict) -
         + json.dumps(_compact(creator), ensure_ascii=False)
         + f"\n\nWhy they fit: {'; '.join(match.get('why', []))}"
     )
-    return await _json(PITCH_SYSTEM, user, PITCH_SCHEMA)
+    # On demand (the user clicked), so this may use the better, paid writing AI.
+    return await _json(PITCH_SYSTEM, user, PITCH_SCHEMA, ai=settings.writer_config())
 
 
 # --- Company setup helper --------------------------------------------------------------------
@@ -542,7 +656,7 @@ For each search give:
 - query: an optional 1-3 word search phrase (a game, product or topic), or "".
 - tags: 1-3 creator types (1-3 words each, Sentence case).
 - markets: 1-3 target countries as ISO codes from the allowed list.
-- platforms: 1-3 of youtube, tiktok, instagram.
+- platforms: 1-2 of youtube, tiktok.
 - follower_min and follower_max: the follower range; follower_max 0 means no upper limit.
 
 Make the searches varied: different niches, markets, platforms and sizes. Include at least one for small creators (under 10k followers) and one for mid-size creators (50k-250k)."""
@@ -563,7 +677,7 @@ SEARCHES_SCHEMA = _obj({
 
 def _clean_search(s: dict) -> dict | None:
     markets = [m for m in (s.get("markets") or []) if m in MARKETS][:3]
-    platforms = [p for p in (s.get("platforms") or []) if p in PLATFORMS]
+    platforms = [p for p in (s.get("platforms") or []) if p in SEARCH_PLATFORMS]
     if not s.get("title") or not markets:
         return None
     try:
@@ -579,7 +693,7 @@ def _clean_search(s: dict) -> dict | None:
         "query": str(s.get("query") or "")[:40],
         "tags": [str(t)[:30] for t in (s.get("tags") or []) if t][:3],
         "markets": markets,
-        "platforms": platforms or list(PLATFORMS),
+        "platforms": platforms or list(SEARCH_PLATFORMS),
         "follower_min": fmin,
         "follower_max": fmax,
     }
@@ -607,7 +721,7 @@ SCOUT_TOOL = {
     "strict": True,
     "input_schema": _obj({
         "creators": {"type": "array", "items": _obj({
-            "platform": {"type": "string", "enum": list(PLATFORMS)},
+            "platform": {"type": "string", "enum": list(SEARCH_PLATFORMS)},
             "handle": STR,
             "evidence": STR,
         })},
@@ -633,9 +747,9 @@ async def web_scout(company: dict, search: dict, market: str, platforms: list[st
 
     Claude only: it relies on Anthropic's server-side web search tool.
     """
-    ai = settings.ai_config()
-    if not ai["web_search"] or not ai["ready"]:
-        raise LLMError("The AI web scout needs Claude as the AI in Settings")
+    ai = settings.scout_config()
+    if not ai:
+        raise LLMError("The AI web scout needs Claude (as the search or writing AI in Settings)")
     names = ", ".join(PLATFORMS[p] for p in platforms)
     prompt = (
         f"{brand_block(company, search)}\n\n"

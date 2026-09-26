@@ -184,8 +184,10 @@ async def discover(http, queries: list[str], market: str, language: str, fmin, f
 
 
 async def lookup_handles(http, handles: list[str], label: str) -> list[dict]:
-    """Resolve @handles (e.g. from the AI web scout) into full creator records."""
+    """Resolve @handles (e.g. from the AI web scout) or channel IDs (UC…) into full creator records."""
     async def resolve(h):
+        if h.startswith("UC") and len(h) == 24:
+            return h
         data = await _get(http, "channels", part="id", forHandle="@" + h.lstrip("@"))
         items = data.get("items", [])
         return items[0]["id"] if items else None

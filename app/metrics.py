@@ -161,12 +161,13 @@ def compute(creator: dict) -> dict:
     creator["views_trend"] = _trend(basis_posts, now)
     creator["trend"] = trend_label(creator["views_trend"])
 
-    interactions = (avg_likes or 0) + (avg_comments or 0)
     rate = reach = None
-    if platform in ("youtube", "tiktok") and avg_views:
-        rate = interactions / avg_views
+    # Likes per view from posts where both are known (our TikTok scraper reads likes on a few videos only).
+    paired = [p for p in window if p.get("views") and isinstance(p.get("likes"), (int, float))]
+    if platform in ("youtube", "tiktok") and paired:
+        rate = sum(p["likes"] + (p.get("comments") or 0) for p in paired) / sum(p["views"] for p in paired)
     elif platform == "instagram" and followers:
-        rate = interactions / followers
+        rate = ((avg_likes or 0) + (avg_comments or 0)) / followers
     if platform in TYPICAL_REACH and avg_views is not None and followers:
         reach = avg_views / followers
     creator["engagement_rate"] = round(rate, 4) if rate is not None else None
@@ -230,3 +231,31 @@ def in_range(followers, fmin, fmax) -> bool:
     if followers is None:
         return False
     return followers >= (fmin or 0) and (fmax is None or followers <= fmax)
+
+
+FREE_MAIL = re.compile(
+    r"@(gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|mac|aol|proton|protonmail|pm|gmx|web|"
+    r"t-online|freenet|mail|email|yandex|seznam|wp|o2|onet|interia|zoho|inbox|luukku|kolumbus|telia|"
+    r"freemail|citromail)\.", re.I)
+AGENCY_WORDS = re.compile(
+    r"\b(management|mgmt|agency|agentur|talent|represented by|managed by|booking|vertretung|byrå|toimisto|"
+    r"agentūra|aģentūra|ügynökség|agencja)\b|mgmt|talents?\.", re.I)
+
+
+def agency_hint(creator: dict) -> bool:
+    """Best guess whether collaborations go through an agency or management rather than the creator.
+
+    True when the bio mentions management/an agency, or a business email sits on a company domain
+    that isn't the creator's own (e.g. gamer@some-agency.gg, not hello@gamername.com)."""
+    emails = creator.get("emails") or []
+    if AGENCY_WORDS.search(creator.get("bio") or "") or any(AGENCY_WORDS.search(e) for e in emails):
+        return True
+    own = {re.sub(r"[^a-z0-9]", "", s.lower()) for s in (creator.get("name") or "", creator.get("handle") or "")}
+    own = {o for o in own if len(o) >= 4}
+    for email in emails:
+        if FREE_MAIL.search(email):
+            continue
+        domain = re.sub(r"[^a-z0-9]", "", email.split("@")[1].rsplit(".", 1)[0].lower())
+        if not any(o in domain or domain in o for o in own):
+            return True
+    return False

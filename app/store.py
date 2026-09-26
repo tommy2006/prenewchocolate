@@ -25,38 +25,46 @@ PRENEW = {
         "Founded 2024, operating across Europe from Espoo and Berlin. Sells tested, warrantied "
         "second-hand gaming PCs at a lower price and footprint than buying new."
     ),
-    # Creator types Claude suggested from the description; shown as one-click chips in the search area.
-    "suggested_tags": ["PC building", "Budget gaming", "Hardware reviews", "Gaming setup", "Esports",
-                       "Streaming setup", "Sustainable tech", "FPS gaming"],
+    # Creator types shown as one-click chips in the search area. Built from Prenew's collaboration history:
+    # mostly gaming creators (Minecraft, Fortnite, GTA, ARK...) plus gaming-tech and gear channels.
+    "suggested_tags": ["Minecraft", "Fortnite", "GTA", "Gaming news", "Gaming tech", "Gaming gear",
+                       "Gaming comedy", "Budget gaming", "PC building", "FPS gaming"],
     "search": None,  # filled from DEFAULT_SEARCH below
     # One-click searches for people who don't know what to type (new companies get AI-written ones).
     "suggested_searches": [
-        {"title": "Budget PC builders in Finland",
-         "description": "Finnish YouTubers who build or upgrade affordable gaming PCs: their viewers are shopping for exactly this.",
-         "query": "", "tags": ["PC building", "Budget gaming"], "markets": ["FI"], "platforms": ["youtube"],
-         "follower_min": 1000, "follower_max": None},
-        {"title": "German tech reviewers, 50k-250k",
-         "description": "Mid-size German hardware reviewers, the subscriber range where Prenew already runs most collaborations.",
-         "query": "", "tags": ["Hardware reviews", "PC building"], "markets": ["DE"], "platforms": ["youtube"],
-         "follower_min": 50000, "follower_max": 250000},
-        {"title": "CS2 & Valorant on TikTok",
-         "description": "FPS players on TikTok with 4k+ followers; their young audience wants a better PC for competitive play.",
-         "query": "", "tags": ["FPS gaming", "Esports"], "markets": ["FI", "DE"], "platforms": ["tiktok"],
-         "follower_min": 4000, "follower_max": None},
-        {"title": "Gaming setup & streaming creators",
-         "description": "Creators who show off desks and streaming gear: a natural home for a 'my new PC' video.",
-         "query": "", "tags": ["Gaming setup", "Streaming setup"], "markets": ["FI", "DE"], "platforms": ["youtube", "tiktok"],
-         "follower_min": 5000, "follower_max": None},
-        {"title": "Second-hand & sustainable tech",
-         "description": "Creators into refurbishing, used deals and e-waste: they match Prenew's sustainability story.",
-         "query": "", "tags": ["Sustainable tech"], "markets": ["DE", "FI"], "platforms": ["youtube", "tiktok", "instagram"],
-         "follower_min": 1000, "follower_max": None},
+        {"title": "Minecraft & Fortnite creators, Finland",
+         "description": "Prenew's most common partner: Finnish gaming channels whose young viewers want their first gaming PC.",
+         "query": "", "tags": ["Minecraft", "Fortnite"], "markets": ["FI"], "platforms": ["youtube", "tiktok"],
+         "follower_min": 5000, "follower_max": 500000},
+        {"title": "Swedish gaming & tech TikTok",
+         "description": "Short gaming-news and tech videos, the style of most of Prenew's Swedish collaborations.",
+         "query": "", "tags": ["Gaming news", "Gaming tech"], "markets": ["SE"], "platforms": ["tiktok"],
+         "follower_min": 4000, "follower_max": 250000},
+        {"title": "Baltic gaming creators",
+         "description": "Estonia, Latvia and Lithuania: small markets where a few thousand followers already reach many local gamers.",
+         "query": "", "tags": ["Minecraft", "GTA"], "markets": ["EE", "LV", "LT"], "platforms": ["tiktok", "youtube"],
+         "follower_min": 2000, "follower_max": 100000},
+        {"title": "German game-specific TikTokers",
+         "description": "Creators focused on one game (ARK, GTA, Souls-likes) or on gaming gear, 5k to 300k followers.",
+         "query": "", "tags": ["Gaming gear", "GTA"], "markets": ["DE"], "platforms": ["tiktok"],
+         "follower_min": 5000, "follower_max": 300000},
+        {"title": "Polish & Hungarian gaming YouTube",
+         "description": "Newer markets for Prenew, where bigger gaming YouTube channels give the fastest reach.",
+         "query": "", "tags": ["Minecraft", "Gaming comedy"], "markets": ["PL", "HU"], "platforms": ["youtube"],
+         "follower_min": 50000, "follower_max": 500000},
         {"title": "Hidden gems: tiny but loyal",
-         "description": "Finnish gaming creators under 10k followers with unusually engaged audiences; cheap and trusted.",
-         "query": "", "tags": ["Budget gaming", "Gaming setup"], "markets": ["FI"], "platforms": ["youtube", "tiktok"],
+         "description": "Nordic and Baltic gaming creators under 10k followers with unusually engaged audiences; cheap and trusted.",
+         "query": "", "tags": ["Minecraft", "Fortnite"], "markets": ["FI", "SE", "EE"], "platforms": ["tiktok", "youtube"],
          "follower_min": 500, "follower_max": 10000},
     ],
+    "seed_version": 2,
 }
+
+# Prenew's first curated searches (before we had their collaboration history); replaced on upgrade.
+_OLD_PRENEW_TITLES = {"Budget PC builders in Finland", "German tech reviewers, 50k-250k", "CS2 & Valorant on TikTok",
+                      "Gaming setup & streaming creators", "Second-hand & sustainable tech", "Hidden gems: tiny but loyal"}
+_OLD_PRENEW_TAGS = {"PC building", "Budget gaming", "Hardware reviews", "Gaming setup", "Esports",
+                    "Streaming setup", "Sustainable tech", "FPS gaming"}
 
 # What the user picks in the search area. Saved per company so it's there next time.
 DEFAULT_SEARCH = {
@@ -73,7 +81,7 @@ DEFAULT_SEARCH = {
 }
 PRENEW["search"] = {
     **DEFAULT_SEARCH,
-    "markets": ["FI", "DE"],
+    "markets": ["FI", "SE", "DE"],
     "deal_types": ["Gifted product", "Affiliate / discount code"],
     "avoid": ["Gambling or skin betting", "Sponsored by competing PC retailers"],
 }
@@ -93,6 +101,17 @@ def _migrate_company(co: dict) -> None:
     co.setdefault("suggested_searches", copy.deepcopy(PRENEW["suggested_searches"]) if co.get("id") == PRENEW["id"] else [])
     for key in ("follower_min", "follower_max"):
         co["search"].setdefault(key, None)
+    if co.get("scout_off") is None:
+        # The web scout runs paid Claude web searches; it's opt-in per search now, never left on by default.
+        co["search"]["ai_scout"] = False
+        co["scout_off"] = True
+    if co.get("id") == PRENEW["id"] and co.get("seed_version", 1) < PRENEW["seed_version"]:
+        # Searches and creator types based on Prenew's real collaborations; keep anything the user added.
+        own = [x for x in co.get("suggested_searches", []) if x.get("title") not in _OLD_PRENEW_TITLES]
+        co["suggested_searches"] = copy.deepcopy(PRENEW["suggested_searches"]) + own
+        own_tags = [t for t in co.get("suggested_tags", []) if t not in _OLD_PRENEW_TAGS]
+        co["suggested_tags"] = list(dict.fromkeys(PRENEW["suggested_tags"] + own_tags))
+        co["seed_version"] = PRENEW["seed_version"]
     for key in _OLD_PROFILE_FIELDS:
         co.pop(key, None)
 

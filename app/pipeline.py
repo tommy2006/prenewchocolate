@@ -1,13 +1,14 @@
 """One discovery run: plan searches -> scrape platforms -> compute metrics -> score with the chosen AI."""
 import asyncio
+import json
 import logging
 
 import httpx
 
-from . import config, llm, metrics, settings
+from . import config, linking, llm, metrics, rules, settings
 from .images import cache_creator_images
 from .markets import MARKETS
-from .sources import instagram, tiktok, youtube
+from .sources import tiktok, youtube
 from .store import now_iso, store
 
 log = logging.getLogger("scout")
@@ -41,6 +42,11 @@ def outside_markets(creator: dict, markets: list[str]) -> bool:
     return bool((country and country not in markets) or (lang and lang != "en" and lang not in langs))
 
 
+def merge_ai(quick: dict, ai: dict) -> dict:
+    """The AI's judgement on top of the quick score: whatever the AI left empty keeps the rules' value."""
+    return {**quick, **{k: v for k, v in ai.items() if v not in (None, "", [])}, "ai_checked": True}
+
+
 def build_match(creator: dict, r: dict, job_id: str, markets: list[str] | None = None) -> dict:
     niche = _clamp(r.get("niche_fit"), 0)
     market = _clamp(r.get("market_fit"), 50)
@@ -50,6 +56,8 @@ def build_match(creator: dict, r: dict, job_id: str, markets: list[str] | None =
     if r.get("competitor_sponsor"):
         score -= 15
     if safety < 50:
+        score -= 15
+    if niche < 30:  # unrelated content (news outlets, music, lifestyle) shouldn't ride on reach and engagement
         score -= 15
     followers = creator.get("followers") or 0
     return {
@@ -70,6 +78,7 @@ def build_match(creator: dict, r: dict, job_id: str, markets: list[str] | None =
         "red_flags": r.get("red_flags", []),
         "competitor_sponsor": bool(r.get("competitor_sponsor")),
         "hidden_gem": followers < 50_000 and eng >= 65 and niche >= 75,
+        "ai_checked": r.get("ai_checked", True),  # False = quick score from rules only
         "status": None,
         "pitch": None,
         "job_id": job_id,
@@ -100,9 +109,38 @@ async def _scout(http, job, company, market, platforms):
         out += await youtube.lookup_handles(http, by_platform["youtube"], label)
     if by_platform.get("tiktok") and status["tiktok"]:
         out += await tiktok.lookup_handles(http, by_platform["tiktok"], label)
-    if by_platform.get("instagram") and status["instagram"]:
-        out += await instagram.lookup_handles(http, by_platform["instagram"], label)
     return out
+
+
+async def _youtube_seeds(http, queries: list[str], market: str, lang: str) -> list[dict]:
+    found = await youtube.discover(http, queries, market, lang, None, None, max_channels=25)
+    for c in found:
+        c["_seed_only"] = True
+    return found
+
+
+async def _tiktok_from_youtube(http, job: dict, candidates: dict[str, dict]) -> list[dict]:
+    """TikTok accounts that the YouTube channels found in this search link to."""
+    handles = []
+    for c in candidates.values():
+        if c["platform"] == "youtube":
+            key = linking.url_key("tiktok", (c.get("socials") or {}).get("tiktok", ""))
+            handle = linking.lookup_handle(key) if key else ""
+            if handle and f"tt_{handle}" not in candidates and handle not in handles:
+                handles.append(handle)
+    if not handles:
+        return []
+    label = "TikTok · linked from local YouTube channels"
+    _step(job, "tt_links", label)
+    try:
+        found = await tiktok.lookup_handles(http, handles[:20], "TikTok linked from a YouTube channel in the search")
+    except Exception as e:
+        _step(job, "tt_links", label, "error", str(e)[:160])
+        return []
+    for c in found:
+        metrics.compute(c)
+    _step(job, "tt_links", label, "done", f"{len(found)} creators")
+    return found
 
 
 async def run_job(job_id: str) -> None:
@@ -112,14 +150,14 @@ async def run_job(job_id: str) -> None:
     fmin, fmax = job.get("follower_min"), job.get("follower_max")
     platforms = [p for p in job["platforms"] if settings.source_status().get(p)]
     ai = settings.ai_config()
-    job["ai"] = f"{ai['label']} · {ai['model']}"
+    job["ai"] = f"{ai['label']} · {ai['model']}" if ai["ready"] else "no AI (quick scores only)"
     markets = [m for m in job["markets"] if m in MARKETS]
     try:
         _step(job, "plan", "Planning local-language searches")
-        plans = await llm.plan_searches(company, {**job, "markets": markets}, platforms)
-        n_queries = sum(len(p["youtube_queries"]) + len(p["tiktok_queries"]) + len(p["tiktok_hashtags"])
-                        + len(p["instagram_hashtags"]) for p in plans)
-        _step(job, "plan", "Planning local-language searches", "done", f"{n_queries} searches across {len(plans)} markets")
+        plans, how = await _plan(company, {**job, "markets": markets}, platforms, ai)
+        n_queries = sum(len(p["youtube_queries"]) + len(p["tiktok_queries"]) + len(p["tiktok_hashtags"]) for p in plans)
+        _step(job, "plan", "Planning local-language searches", "done",
+              f"{n_queries} searches across {len(plans)} markets ({how})")
         job["plan"] = plans
 
         async with httpx.AsyncClient() as http:
@@ -133,14 +171,15 @@ async def run_job(job_id: str) -> None:
                 if "tiktok" in platforms and (plan["tiktok_queries"] or plan["tiktok_hashtags"]):
                     tasks.append(_run_source(job, f"tt_{m}", f"TikTok · {MARKETS[m]['name']}",
                                              tiktok.discover(http, plan["tiktok_queries"], plan["tiktok_hashtags"], m, fmin, fmax)))
-                if "instagram" in platforms and plan["instagram_hashtags"]:
-                    tasks.append(_run_source(job, f"ig_{m}", f"Instagram · {MARKETS[m]['name']}",
-                                             instagram.discover(http, plan["instagram_hashtags"], m, fmin, fmax)))
-                if job.get("ai_scout") and ai["web_search"]:
+                    if "youtube" not in platforms and settings.source_status()["youtube"]:
+                        # Local YouTubers often link their TikTok: a reliable way to find local TikTokers.
+                        tasks.append(_run_source(job, f"yts_{m}", f"YouTube channels that link a TikTok · {MARKETS[m]['name']}",
+                                                 _youtube_seeds(http, plan["tiktok_queries"][:2], m, lang)))
+                if job.get("ai_scout") and settings.scout_config():
                     tasks.append(_run_source(job, f"ai_{m}", f"AI web scout · {MARKETS[m]['name']}",
                                              _scout(http, job, company, m, platforms)))
                 elif job.get("ai_scout"):
-                    _step(job, f"ai_{m}", f"AI web scout · {MARKETS[m]['name']}", "skipped", f"needs Claude, not {ai['label']}")
+                    _step(job, f"ai_{m}", f"AI web scout · {MARKETS[m]['name']}", "skipped", "needs Claude in Settings")
             results = await asyncio.gather(*tasks)
 
             candidates: dict[str, dict] = {}
@@ -150,13 +189,20 @@ async def run_job(job_id: str) -> None:
                         candidates[c["id"]]["found_via"] = sorted(set(candidates[c["id"]]["found_via"] + c["found_via"]))
                     else:
                         candidates[c["id"]] = c
+            for c in candidates.values():
+                metrics.compute(c)
+            if "tiktok" in platforms:
+                for c in await _tiktok_from_youtube(http, job, candidates):
+                    candidates.setdefault(c["id"], c)
+            seeds = [cid for cid, c in candidates.items() if c.pop("_seed_only", False)]
+            for cid in seeds:  # YouTube wasn't asked for: those channels were only a way to their TikToks
+                candidates.pop(cid)
             job["found"] = len(candidates)
 
             _step(job, "filter", "Checking size, activity, engagement and market")
             already = store.matches.get(company["id"], {})
             pool, outside = [], 0
             for c in candidates.values():
-                metrics.compute(c)
                 if not metrics.in_range(c.get("followers"), fmin, fmax):
                     continue
                 if c.get("days_since_last_post") is None or c["days_since_last_post"] > ACTIVE_DAYS:
@@ -186,7 +232,10 @@ async def run_job(job_id: str) -> None:
         store.save()
 
         await score_pool(job, company, pool, ai)
+        await _link_step(job, company)
         job["status"] = "done"
+    except asyncio.CancelledError:
+        _stopped(job)
     except Exception as e:
         log.exception("job %s failed", job_id)
         job["status"] = "error"
@@ -197,79 +246,218 @@ async def run_job(job_id: str) -> None:
         store.save()
 
 
-MIN_MARKET_FIT = 35  # below this the AI judged the audience to be clearly outside the chosen markets
+def _stopped(job: dict) -> None:
+    """The user pressed Stop. Whatever was scored so far stays in the results."""
+    job["status"] = "stopped"
+    job["new"] = sum(1 for m in store.matches.get(job["company_id"], {}).values() if m.get("job_id") == job["id"])
+    for s in job["steps"]:
+        if s["status"] == "running":
+            s.update(status="skipped", detail="stopped")
+
+
+LINK_LOOKUPS = 20  # per search: the other platform of the best-ranked new creators
+
+
+async def fetch_linked(creators: list[dict], limit: int = LINK_LOOKUPS) -> int:
+    """Fetch the YouTube channel or TikTok profile that a creator links to, so the same person's numbers
+    on both platforms end up in one row (the way Prenew tracks collaborations). Returns profiles added."""
+    status = settings.source_status()
+    have = _library_keys()
+    want: dict[str, list[str]] = {"youtube": [], "tiktok": []}
+    for c in creators:
+        for network, key in linking.missing_links(c, have):
+            if status.get(network) and key not in have and sum(map(len, want.values())) < limit:
+                want[network].append(linking.lookup_handle(key))
+                have.add(key)
+    if not any(want.values()):
+        return 0
+    label = "Linked from their other profile"
+    found = []
+    async with httpx.AsyncClient() as http:
+        for network, source in (("youtube", youtube), ("tiktok", tiktok)):
+            if want[network]:
+                try:
+                    found += await source.lookup_handles(http, want[network], label)
+                except Exception as e:  # extra detail only; never fail a search over it
+                    log.warning("linked %s lookup failed: %s", network, e)
+    added = 0
+    for c in found:
+        if c["id"] in store.creators:
+            continue
+        metrics.compute(c)
+        c["avatar"], c["cover"] = c.get("avatar_src"), c.get("cover_src")
+        c["fetched_at"] = now_iso()
+        store.creators[c["id"]] = c
+        added += 1
+    store.save()
+    return added
+
+
+def _library_keys() -> set[str]:
+    return {k for c in store.creators.values() for k in linking.own_keys(c)}
+
+
+async def _link_step(job: dict, company: dict) -> None:
+    label = "Adding their other platforms"
+    new = sorted((m["score"], cid) for cid, m in store.matches.get(company["id"], {}).items() if m.get("job_id") == job["id"])
+    creators = [store.creators[cid] for _, cid in reversed(new) if cid in store.creators]
+    have = _library_keys()
+    if not any(linking.missing_links(c, have) for c in creators):
+        return
+    _step(job, "link", label)
+    try:
+        added = await fetch_linked(creators)
+        _step(job, "link", label, "done", f"YouTube/TikTok numbers added for {added} creators" if added else "nothing new")
+    except Exception as e:
+        log.exception("linking profiles failed")
+        _step(job, "link", label, "error", str(e)[:160])
+
+
+MIN_MARKET_FIT = 35  # below this the creator's audience is clearly outside the chosen markets
+AI_CHECK = {"local": 10, "cloud": 40}  # creators the AI re-checks per search; the rest keep their quick score
+
+
+async def _plan(company: dict, search: dict, platforms: list[str], ai: dict) -> tuple[list[dict], str]:
+    """Local-language search terms: remembered per search, else the AI writes them, else templates."""
+    key = json.dumps(["v2", sorted(search["markets"]), sorted(platforms), sorted(search.get("tags") or []),
+                      (search.get("focus") or "").strip().lower()])
+    cache = company.setdefault("plan_cache", {})
+    if key in cache:
+        return cache[key], "same as last time, no AI needed"
+    if ai["ready"]:
+        try:
+            plans = _blend(await asyncio.wait_for(llm.plan_searches(company, search, platforms), 240),
+                           rules.template_plan(company, search, platforms))
+            if plans:
+                cache[key] = plans
+                while len(cache) > 40:
+                    cache.pop(next(iter(cache)))
+                return plans, f"written by {ai['label']}"
+        except Exception as e:
+            log.warning("AI planning failed, using templates: %s", e)
+    return rules.template_plan(company, search, platforms), "from templates"
+
+
+def _blend(ai_plans: list[dict], templates: list[dict]) -> list[dict]:
+    """The AI's local-language ideas plus the plain templates (creator type + local word), which always
+    find something even when a small model's ideas are off."""
+    by_market = {p["market"]: p for p in ai_plans}
+    out = []
+    for t in templates:
+        a = by_market.get(t["market"], {})
+
+        def mix(key, from_template, total):
+            return list(dict.fromkeys(t[key][:from_template] + (a.get(key) or [])))[:total]
+
+        out.append({"market": t["market"], "youtube_queries": mix("youtube_queries", 1, 4),
+                    "tiktok_queries": mix("tiktok_queries", 2, 5), "tiktok_hashtags": mix("tiktok_hashtags", 1, 3)})
+    return out
 
 
 async def score_pool(job: dict, company: dict, pool: list[dict], ai: dict) -> None:
-    """Score creators in batches. Creators whose batch fails are kept in job["unscored"] for a retry."""
-    job_id = job["id"]
-    job["to_score"] = len(pool)
-    job["scored"] = 0
-    job["unscored"] = []
-    job.pop("score_error", None)
-    label = f"Scoring fit with {ai['label']}"
-    _step(job, "score", label, detail=f"0 / {len(pool)}")
+    """1. Rules give every creator a score at once (free). 2. The search AI re-checks the best ones."""
     company_matches = store.matches.setdefault(company["id"], {})
-    # Claude handles parallel batches well; free tiers elsewhere get overloaded, so go gentler.
-    sem = asyncio.Semaphore(config.SCORE_CONCURRENCY if ai["kind"] == "anthropic" else 2)
+    outside, ranked = 0, []
+    for c in pool:
+        r = rules.quick_score(c, company, job)
+        if r["market_fit"] < MIN_MARKET_FIT:
+            outside += 1
+            continue
+        company_matches[c["id"]] = build_match(c, r, job["id"], job["markets"])
+        ranked.append(c)
+    store.save()
+    job["outside"] = job.get("outside", 0) + outside
+    detail = f"{len(ranked)} creators ranked" + (f"; {outside} outside your markets" if outside else "")
+    _step(job, "rules", "Quick scores (free, no AI)", "done", detail)
+    ranked.sort(key=lambda c: -company_matches[c["id"]]["score"])
+    job["new"] = len(ranked)
+    job["unscored"] = [c["id"] for c in ranked]  # = not checked by the AI yet
+    if not ai["ready"]:
+        _step(job, "score", "AI check", "skipped", "no AI set up; quick scores only")
+        return
+    await ai_check(job, company, ranked[:AI_CHECK["local" if ai["local"] else "cloud"]], ai)
+
+
+async def ai_check(job: dict, company: dict, creators: list[dict], ai: dict) -> None:
+    """Let the search AI re-score creators (it reads their posts: niche fit, competitors, a summary).
+    A failed batch keeps its quick scores and stays in job["unscored"] for "Check more with AI"."""
+    job_id = job["id"]
+    job["to_score"] = len(creators)
+    job["scored"] = 0
+    job.pop("score_error", None)
+    label = f"AI check with {ai['label']}" + (" (on this computer)" if ai["local"] else "")
+    _step(job, "score", label, detail=f"0 / {len(creators)}")
+    company_matches = store.matches.setdefault(company["id"], {})
+    # A laptop runs one local request at a time; Claude handles parallel batches well; free tiers need care.
+    sem = asyncio.Semaphore(1 if ai["local"] else config.SCORE_CONCURRENCY if ai["kind"] == "anthropic" else 2)
     outside = 0
 
-    async def score(batch):
+    async def check(batch):
         nonlocal outside
         async with sem:
             try:
-                results = await llm.score_batch(company, job, batch)
+                results = await llm.score_batch(company, job, batch, ai)
             except Exception as e:
-                log.warning("scoring batch failed: %s", e)
+                log.warning("AI check batch failed: %s", e)
                 job["score_error"] = str(e)[:240]
                 results = None
         for c in batch:
             r = (results or {}).get(c["id"])
             if r is None:
-                job["unscored"].append(c["id"])
                 continue
             if not c.get("language") and r.get("language"):
                 c["language"] = str(r["language"])[:2].lower()
-            match = build_match(c, r, job_id, job["markets"])
+            old = company_matches.get(c["id"]) or {}
+            r = merge_ai(rules.quick_score(c, company, job), r)
+            match = build_match(c, r, old.get("job_id") or job_id, old.get("search_markets") or job["markets"])
+            match.update(status=old.get("status"), pitch=old.get("pitch"),
+                         created_at=old.get("created_at", match["created_at"]))
+            if c["id"] in job["unscored"]:
+                job["unscored"].remove(c["id"])
             if match["market_fit"] < MIN_MARKET_FIT:
                 outside += 1
+                company_matches.pop(c["id"], None)
                 continue
             company_matches[c["id"]] = match
         job["scored"] += len(batch)
-        _step(job, "score", label, detail=f"{job['scored']} / {len(pool)}")
+        _step(job, "score", label, detail=f"{job['scored']} / {len(creators)}")
         store.save()
 
     size = ai.get("batch_size", config.SCORE_BATCH_SIZE)
-    await asyncio.gather(*(score(pool[i:i + size]) for i in range(0, len(pool), size)))
-    new = sum(1 for m in company_matches.values() if m.get("job_id") == job_id)
-    override = llm.model_overrides.get(ai["provider"])
-    job["new"] = new
+    await asyncio.gather(*(check(creators[i:i + size]) for i in range(0, len(creators), size)))
+    job["new"] = sum(1 for m in company_matches.values() if m.get("job_id") == job_id)
     job["outside"] = job.get("outside", 0) + outside
-    parts = [f"{new} creators ranked"]
+    failed = sum(1 for c in creators if c["id"] in job["unscored"])
+    checked = len(creators) - failed
+    parts = [f"{checked} checked"]
     if outside:
         parts.append(f"{outside} judged outside your markets")
+    override = llm.model_overrides.get(ai["provider"])
     if override:
         parts.append(f"used {override['model']} because {override['reason']}")
-    if job["unscored"]:
-        parts.append(f"{len(job['unscored'])} couldn't be scored: {job.get('score_error') or ai['label'] + ' failed'}")
-    _step(job, "score", label, "error" if job["unscored"] and not new else "done", "; ".join(parts))
+    if failed:
+        parts.append(f"{failed} kept their quick score: {job.get('score_error') or ai['label'] + ' failed'}")
+    _step(job, "score", label, "error" if failed and not checked else "done", "; ".join(parts))
 
 
 async def retry_scoring(job_id: str) -> None:
-    """Score the creators a job couldn't score, without searching the platforms again."""
+    """"Check more with AI": the next creators of this search that only have a quick score."""
     job = store.jobs[job_id]
     company = store.companies[job["company_id"]]
-    pool = [store.creators[cid] for cid in job.get("unscored", [])
-            if cid in store.creators and not outside_markets(store.creators[cid], job["markets"])]
     ai = settings.ai_config()
+    matches = store.matches.get(company["id"], {})
+    waiting = [store.creators[cid] for cid in job.get("unscored", []) if cid in store.creators and cid in matches]
+    waiting.sort(key=lambda c: -matches[c["id"]]["score"])
+    job["unscored"] = [c["id"] for c in waiting]
     job["status"] = "running"
     earlier = job.get("new", 0)
     try:
-        await score_pool(job, company, pool, ai)
-        job["new"] = sum(1 for m in store.matches.get(company["id"], {}).values() if m.get("job_id") == job_id)
+        await ai_check(job, company, waiting[:AI_CHECK["local" if ai["local"] else "cloud"]], ai)
         job["status"] = "done"
+    except asyncio.CancelledError:
+        _stopped(job)
     except Exception as e:
-        log.exception("retry of job %s failed", job_id)
+        log.exception("AI check of job %s failed", job_id)
         job["status"] = "error"
         job["error"] = str(e)[:300]
     finally:
