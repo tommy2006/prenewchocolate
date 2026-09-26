@@ -566,11 +566,19 @@ async function loadCreators({ quiet = false } = {}) {
   renderResults(data);
 }
 
+// A score inside a ring that fills up to it (82 -> 82% of the circle). Dashed track = quick estimate.
+const ringClass = (v) => (v == null ? "ring-none" : v >= 75 ? "ring-hi" : v >= 55 ? "ring-mid" : "ring-lo");
+function ringHtml(value, size = "xs", { quick = false, low = false, tip = "" } = {}) {
+  const v = Math.max(0, Math.min(100, value ?? 0));
+  return `<span class="ring ring-${size} ${ringClass(value)}${quick ? " quick" : ""}${low ? " low" : ""}"${tip ? ` data-tip="${esc(tip)}"` : ""}>
+    <svg viewBox="0 0 36 36" aria-hidden="true"><circle class="ring-track" cx="18" cy="18" r="15.5"/>
+      <circle class="ring-bar" cx="18" cy="18" r="15.5" pathLength="100" stroke-dasharray="${v} 100"/></svg>
+    <b>${value ?? "—"}</b></span>`;
+}
+
 function scoreHtml(value, c, kind) {
-  const quick = c.checked === "rules";
-  const low = c.confidence === "low";
   const tip = c.tips?.[kind] || (kind === "fit" ? `Fit ${value}` : `Audience quality ${value}`);
-  return `<span class="sc ${scoreClass(value)}${quick ? " quick" : ""}${low ? " low" : ""}" data-tip="${esc(tip)}">${value ?? "—"}</span>`;
+  return ringHtml(value, "xs", { quick: c.checked === "rules", low: c.confidence === "low", tip });
 }
 
 function badges(c) {
@@ -602,7 +610,7 @@ function rowHtml(c, i) {
 
 // Poster cards: the creator's image with Fit and Quality on it; a short summary on hover.
 function pillHtml(label, value, c, kind) {
-  return `<span class="pill-score ${scoreClass(value)}${c.checked === "rules" ? " quick" : ""}" data-tip="${esc(c.tips?.[kind] || "")}"><small>${label}</small>${value ?? "—"}</span>`;
+  return `<span class="pill-score" data-tip="${esc(c.tips?.[kind] || "")}">${ringHtml(value, "xs", { quick: c.checked === "rules" })}<small>${label}</small></span>`;
 }
 
 const ui = () => document.documentElement.dataset.ui || "modern";
@@ -612,15 +620,17 @@ function modernCardHtml(c, i) {
   const starred = c.status && c.status !== "hidden";
   const img = c.cover ? `<img src="${esc(c.cover)}" alt="" loading="lazy" data-name="${esc(c.name)}">` : placeholder(c.name);
   const meta = [`${fmtNum(c.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}`, S.meta.markets[c.country]?.name || c.country, c.niche].filter(Boolean).join(" · ");
-  const pill = (label, value, kind) => `<span class="mpill ${scoreClass(value)}${c.checked === "rules" ? " quick" : ""}" data-tip="${esc(c.tips?.[kind] || "")}">${label} <b>${value ?? "—"}</b></span>`;
+  const score = (label, value, kind, word) => `<span class="mscore" data-tip="${esc(c.tips?.[kind] || "")}">${ringHtml(value, "sm", { quick: c.checked === "rules" })}
+    <span><b>${label}</b><small>${word}</small></span></span>`;
+  const tags = `${c.is_new ? '<span class="mpill new">New</span>' : ""}${c.hidden_gem ? '<span class="mpill gem">Hidden gem</span>' : ""}${c.partner ? '<span class="mpill partner">Past partner</span>' : ""}`;
   return `<article class="card mcard ${i === S.cursor ? "cur" : ""} ${S.panelId === c.id ? "open" : ""}" data-id="${esc(c.id)}" data-i="${i}" tabindex="0" aria-label="${esc(c.name)}, fit ${c.fit}, quality ${c.quality}">
     <div class="mcard-img">${img}
       <span class="mplat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
       <button class="mstar ${starred ? "on" : ""}" data-star="${esc(c.id)}" title="${starred ? "On your shortlist" : "Add to shortlist"} (s)" aria-label="Shortlist">${starred ? ICONS.starOn : ICONS.star}</button>
     </div>
     <div class="mcard-body">
-      <div class="mpills">${pill("Fit", c.fit, "fit")}${pill("Quality", c.quality, "quality")}
-        ${c.is_new ? '<span class="mpill new">New</span>' : ""}${c.hidden_gem ? '<span class="mpill gem">Hidden gem</span>' : ""}${c.partner ? '<span class="mpill partner">Past partner</span>' : ""}</div>
+      <div class="mscores">${score("Fit", c.fit, "fit", fitWord(c.fit ?? 0).replace(" fit", ""))}${score("Quality", c.quality, "quality", qualityWord(c.quality ?? 0).replace(" audience", ""))}</div>
+      ${tags ? `<div class="mpills">${tags}</div>` : ""}
       <h3>${esc(c.name)}</h3>
       <p class="mmeta">${esc(meta)}</p>
       <p class="mviews">${fmtNum(c.median_views ?? c.avg_views)} typical views ${trendHtml(c.views_trend)}</p>
@@ -694,7 +704,7 @@ function renderResults(data) {
     }
   }
   const legend = `<p class="legend"><span><b>Fit</b>: how well they suit ${esc(S.company.name)}</span><span><b>Quality</b>: are their viewers real and engaged</span>
-      <span><span class="sc quick">00</span> dashed = quick estimate, not yet read by AI</span><span>Hover a score to see why · click a creator for details</span></p>`;
+      <span class="legend-ring">${ringHtml(70, "xs", { quick: true })} dashed ring = quick estimate, not yet read by AI</span><span>Hover a score to see why · click a creator for details</span></p>`;
   if (S.mode === "cards" || window.innerWidth < 700) {  // a table doesn't fit a phone
     grid.className = "";
     grid.innerHTML = legend + `<div class="posters">${data.items.map(cardHtml).join("")}</div>`;
@@ -981,9 +991,9 @@ function renderDetail(d) {
             ${m.deep?.sponsors_seen?.length ? `<dt>Sponsors</dt><dd>${esc(m.deep.sponsors_seen.join(", "))}</dd>` : ""}</dl>` : ""}
 
           <div class="d-scores">
-            <div class="scorecard" data-tip="${esc(x.fit || "")}"><b class="${scoreClass(m.fit)}">${m.fit}</b>
+            <div class="scorecard" data-tip="${esc(x.fit || "")}">${ringHtml(m.fit, "lg", { quick: m.checked === "rules" })}
               <div><strong>${fitWord(m.fit)}</strong><small>How well they suit ${esc(S.company.name)}: content, audience, market, brand and cost.</small></div></div>
-            <div class="scorecard" data-tip="${esc(x.quality || "")}"><b class="${scoreClass(m.quality)}">${m.quality}</b>
+            <div class="scorecard" data-tip="${esc(x.quality || "")}">${ringHtml(m.quality, "lg", { quick: m.checked === "rules" })}
               <div><strong>${qualityWord(m.quality)}</strong><small>Whether their viewers are real, engaged and still growing.</small></div></div>
           </div>
 

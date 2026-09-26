@@ -82,7 +82,8 @@ everything else works the same in both.
 Enter: markets, platform, creator types, size and "has email" are filled in instantly by rules, and the AI reads
 whatever the rules didn't understand. The filters stay visible and editable; *Undo* puts them back. Click the empty
 search box for **recent searches**. Creators show as **posters** (their image, with Fit and Quality on it and a
-summary on hover), or as a compact table. **Hover any score** for a short explanation about that creator (what
+summary on hover), or as a compact table. Each score sits in a **ring that fills up to it** (green, amber or grey; a dashed ring is a
+quick estimate the AI hasn't checked yet). **Hover any score** for a short explanation about that creator (what
 helps, what hurts, what isn't checked yet). Click a creator to open a window with their image and a **summary**
 (verdict, Fit and Quality in plain words, key numbers, why they could work, what to watch out for, contact) and
 their **recent videos**: click one to watch it right there (YouTube and TikTok). The evidence, audience details,
