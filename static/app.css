@@ -381,8 +381,6 @@ th.num { text-align: right; }
 .ring-lg b { font-size: 24px; }
 .d-scores .ring-bar { animation: ring-in .8s ease-out; }
 @keyframes ring-in { from { stroke-dasharray: 0 100; } }
-[data-ui="classic"] .ring b { font-family: var(--font-display); font-weight: 400; letter-spacing: .5px; font-size: calc(var(--rs) * .42); }
-[data-ui="classic"] .ring-lg b { font-size: 30px; }
 .s-hi { background: var(--good-bg); color: var(--good-ink); }
 .s-mid { background: var(--warn-bg); color: var(--warn-ink); }
 .s-lo, .s-none { background: var(--low-bg); color: var(--muted); }
@@ -947,8 +945,7 @@ html[data-ui="modern"] .recall { border-radius: 16px; }
 
 /* ======================================================================================================
    Modern look (html[data-ui="modern"]): clean and white, bold geometric type, orange pill buttons,
-   big rounded images; follows the computer's dark mode like the classic look does. The classic look above
-   is untouched; the switch in the top bar flips between them.
+   big rounded images; follows the computer's dark mode. It is the only look: it builds on the base styles above.
    ====================================================================================================== */
 html[data-ui="modern"] {
   color-scheme: light;
@@ -1030,8 +1027,6 @@ html[data-ui="modern"] .brand-co { display: block; }
 html[data-ui="modern"] .tab { border-radius: 999px; padding: 8px 14px; }
 html[data-ui="modern"] .company-btn, html[data-ui="modern"] .icon-btn { border-radius: 999px; }
 html[data-ui="modern"] .count { background: var(--accent); color: #fff; }
-.ui-switch { flex: none; }
-.ui-switch button { height: 30px; padding: 0 12px; }
 html[data-ui="modern"] .seg { border-radius: 999px; background: var(--surface-2); border-color: transparent; padding: 3px; gap: 2px; }
 html[data-ui="modern"] .seg button { border-radius: 999px; border: 0; height: 28px; }
 html[data-ui="modern"] .seg button + button { border-left: 0; }
@@ -1072,7 +1067,7 @@ html[data-ui="modern"] .shortlist-head h1 { font-weight: 800; font-size: 38px; l
 html[data-ui="modern"] .tag.gem { background: var(--gem-bg); color: var(--gem-ink); }
 
 /* Creator cards: a big rounded image, the text and scores below (like an article card) */
-/* Same density as the classic posters: 7 creators a row on a laptop-wide window */
+/* 7 creators a row on a laptop-wide window */
 html[data-ui="modern"] .posters { grid-template-columns: repeat(auto-fill, minmax(172px, 1fr)); gap: 30px 18px; }
 .mcard { display: flex; flex-direction: column; gap: 10px; }
 .mcard-img { position: relative; aspect-ratio: 4 / 5; border-radius: 20px; overflow: hidden; background: var(--surface-2); }
@@ -1163,7 +1158,6 @@ html[data-ui="modern"] .field textarea, html[data-ui="modern"] .field input[type
   html[data-ui="modern"] .tab { padding: 6px 9px; }
   html[data-ui="modern"] .company-btn { padding: 5px 9px; }
   html[data-ui="modern"] .brand-name { display: inline-flex; font-size: 17px; }
-  .ui-switch { display: none; }
 }
 /* Phones: the word mark, tabs, company and settings do not fit in one row, so the tabs move to a second row */
 @media (max-width: 560px) {

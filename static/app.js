@@ -649,12 +649,6 @@ function rowHtml(c, i) {
   </tr>`;
 }
 
-// Poster cards: the creator's image with Fit and Quality on it; a short summary on hover.
-function pillHtml(label, value, c, kind) {
-  return `<span class="pill-score" data-tip="${esc(c.tips?.[kind] || "")}">${ringHtml(value, "xs", { quick: c.checked === "rules" })}<small>${label}</small></span>`;
-}
-
-const ui = () => document.documentElement.dataset.ui || "modern";
 // A creator's name: a link that opens their stats window.
 const nameLink = (c) => `<a href="#" class="cname" data-stats="${esc(c.id)}" title="See ${esc(c.name)}'s stats"><span class="cname-t">${esc(c.name)}</span><span class="cname-ico">${ICONS.chart}</span></a>`;
 
@@ -682,31 +676,7 @@ function modernCardHtml(c, i) {
   </article>`;
 }
 
-function cardHtml(c, i) {
-  if (ui() === "modern") return modernCardHtml(c, i);
-  const starred = c.status && c.status !== "hidden";
-  const img = c.cover ? `<img src="${esc(c.cover)}" alt="" loading="lazy" data-name="${esc(c.name)}">` : placeholder(c.name);
-  const place = [fmtNum(c.followers), S.meta.markets[c.country]?.name || c.country, c.niche].filter(Boolean).join(" · ");
-  return `<article class="card ${i === S.cursor ? "cur" : ""} ${S.panelId === c.id ? "open" : ""}" data-id="${esc(c.id)}" data-i="${i}" tabindex="0" aria-label="${esc(c.name)}, fit ${c.fit}, quality ${c.quality}">
-    <div class="cover">
-      ${img}
-      <span class="plat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
-      <span class="pills">${pillHtml("Fit", c.fit, c, "fit")}${pillHtml("Quality", c.quality, c, "quality")}</span>
-      <span class="badges">
-        ${c.partner ? `<span class="badge" ${tipAttr("partner", c)}>🤝</span>` : ""}
-        ${c.hidden_gem ? `<span class="badge" ${tipAttr("gem", c)}>💎</span>` : ""}
-        <button class="badge star ${starred ? "on" : ""}" data-star="${esc(c.id)}" title="${starred ? "On your shortlist" : "Add to shortlist"} (s)" aria-label="Shortlist">${starred ? ICONS.starOn : ICONS.star}</button>
-      </span>
-      <div class="hover">
-        <p>${esc(c.summary)}</p>
-        ${c.games?.length ? `<p class="games">🎮 ${esc(c.games.join(", "))}</p>` : ""}
-        <p class="games">${fmtNum(c.median_views ?? c.avg_views)} typical views ${trendHtml(c.views_trend)}</p>
-        <span class="more">Click for details →</span>
-      </div>
-    </div>
-    <div class="meta"><h3>${nameLink(c)}</h3><p>${esc(place)}</p></div>
-  </article>`;
-}
+const cardHtml = modernCardHtml;
 
 function renderResults(data) {
   const grid = $("#grid");
@@ -1834,14 +1804,6 @@ function setMode(mode) {
   loadCreators();
 }
 
-// Switch between the modern and the classic look; everything else stays the same.
-function setUi(look) {
-  document.documentElement.dataset.ui = look;
-  try { localStorage.setItem("scout.ui", look); } catch { /* storage blocked */ }
-  $$("[data-ui-set]").forEach((b) => b.classList.toggle("on", b.dataset.uiSet === look));
-  if (S.view === "discover") loadCreators({ quiet: true });
-}
-
 // ---------- Events ----------
 const typing = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName) || document.activeElement.isContentEditable;
 
@@ -1963,8 +1925,6 @@ function bindEvents() {
     if (viewBtn) { showView(viewBtn.dataset.view); return; }
     const modeBtn = e.target.closest("[data-mode]");
     if (modeBtn) { setMode(modeBtn.dataset.mode); return; }
-    const uiBtn = e.target.closest("[data-ui-set]");
-    if (uiBtn) { setUi(uiBtn.dataset.uiSet); return; }
     const plat = e.target.closest("[data-platform]");
     if (plat) { S.f.platforms = plat.dataset.platform ? [plat.dataset.platform] : []; renderPlatforms(); searchChanged(); return; }
     const pageBtn = e.target.closest("[data-page]");
@@ -2097,7 +2057,6 @@ function bindEvents() {
   bindEvents();
   try { S.mode = localStorage.getItem("scout.layout") || "cards"; } catch { /* storage blocked */ }
   $$("#view-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
-  $$("[data-ui-set]").forEach((b) => b.classList.toggle("on", b.dataset.uiSet === ui()));
   try {
     [S.meta, S.companies] = await Promise.all([api("/api/meta"), api("/api/companies")]);
   } catch (e) {
