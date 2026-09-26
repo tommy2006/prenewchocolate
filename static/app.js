@@ -112,7 +112,7 @@ const S = {
   companies: [],
   company: null,
   view: "discover",
-  mode: "table",      // table | cards
+  mode: "cards",      // cards (posters) | table
   f: { ...DEFAULT_FILTERS },
   page: 1,
   rows: [],           // creators on the current page
@@ -576,9 +576,9 @@ function scoreHtml(value, c, kind) {
 function badges(c) {
   return [
     c.is_new ? '<span class="tag new">New</span>' : "",
-    c.partner ? `<span class="tag partner" title="${esc(`Worked with ${S.company.name} before${c.partner === true ? "" : ` (latest: ${c.partner})`}`)}">Past partner</span>` : "",
-    c.hidden_gem ? '<span class="tag gem" title="Small, highly engaged, on-niche and authentic">Gem</span>' : "",
-    c.checked === "deep" ? '<span class="tag deep" title="Deep evaluation done">Evaluated</span>' : "",
+    c.partner ? `<span class="tag partner" title="${esc(`Worked with ${S.company.name} before${c.partner === true ? "" : ` (latest: ${c.partner})`}`)}">🤝 Past partner</span>` : "",
+    c.hidden_gem ? '<span class="tag gem" title="Small, highly engaged, on-niche and authentic">💎 Gem</span>' : "",
+    c.checked === "deep" ? '<span class="tag deep" title="Deep evaluation done">✦ Evaluated</span>' : "",
   ].join("");
 }
 
@@ -600,16 +600,34 @@ function rowHtml(c, i) {
   </tr>`;
 }
 
+// Poster cards: the creator's image with Fit and Quality on it; a short summary on hover.
+function pillHtml(label, value, c, kind) {
+  return `<span class="pill-score ${scoreClass(value)}${c.checked === "rules" ? " quick" : ""}" data-tip="${esc(c.tips?.[kind] || "")}"><small>${label}</small>${value ?? "—"}</span>`;
+}
+
 function cardHtml(c, i) {
   const starred = c.status && c.status !== "hidden";
-  return `<article class="card ${i === S.cursor ? "cur" : ""} ${S.panelId === c.id ? "open" : ""}" data-id="${esc(c.id)}" data-i="${i}" tabindex="0">
-    <div class="card-top">${avatar(c.avatar, c.name)}
-      <div class="card-id"><b>${esc(c.name)}</b><small><span class="plat plat-${c.platform}">${ICONS[c.platform]}</span>${fmtNum(c.followers)} · ${esc(c.country || "—")}</small></div>
-      <button class="star ${starred ? "on" : ""}" data-star="${esc(c.id)}" aria-label="Shortlist">${starred ? ICONS.starOn : ICONS.star}</button></div>
-    <div class="card-scores"><span>Fit ${scoreHtml(c.fit, c, "fit")}</span><span>Quality ${scoreHtml(c.quality, c, "quality")}</span>
-      <span class="muted">${fmtNum(c.median_views ?? c.avg_views)} views ${trendHtml(c.views_trend)}</span></div>
-    <p class="card-sum">${esc(c.summary)}</p>
-    <div class="card-tags">${badges(c)}</div>
+  const img = c.cover ? `<img src="${esc(c.cover)}" alt="" loading="lazy" data-name="${esc(c.name)}">` : placeholder(c.name);
+  const place = [fmtNum(c.followers), S.meta.markets[c.country]?.name || c.country, c.niche].filter(Boolean).join(" · ");
+  return `<article class="card ${i === S.cursor ? "cur" : ""} ${S.panelId === c.id ? "open" : ""}" data-id="${esc(c.id)}" data-i="${i}" tabindex="0" aria-label="${esc(c.name)}, fit ${c.fit}, quality ${c.quality}">
+    <div class="cover">
+      ${img}
+      <span class="plat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
+      <span class="pills">${pillHtml("Fit", c.fit, c, "fit")}${pillHtml("Quality", c.quality, c, "quality")}</span>
+      ${c.is_new ? '<span class="ribbon">NEW</span>' : ""}
+      <span class="badges">
+        ${c.partner ? `<span class="badge" title="${esc(`Worked with ${S.company.name} before`)}">🤝</span>` : ""}
+        ${c.hidden_gem ? '<span class="badge" title="Hidden gem: small, highly engaged, on-niche and authentic">💎</span>' : ""}
+        <button class="badge star ${starred ? "on" : ""}" data-star="${esc(c.id)}" title="${starred ? "On your shortlist" : "Add to shortlist"} (s)" aria-label="Shortlist">${starred ? ICONS.starOn : ICONS.star}</button>
+      </span>
+      <div class="hover">
+        <p>${esc(c.summary)}</p>
+        ${c.games?.length ? `<p class="games">🎮 ${esc(c.games.join(", "))}</p>` : ""}
+        <p class="games">${fmtNum(c.median_views ?? c.avg_views)} typical views ${trendHtml(c.views_trend)}</p>
+        <span class="more">Click for details →</span>
+      </div>
+    </div>
+    <div class="meta"><h3>${esc(c.name)}</h3><p>${esc(place)}</p></div>
   </article>`;
 }
 
@@ -650,14 +668,15 @@ function renderResults(data) {
       return;
     }
   }
+  const legend = `<p class="legend"><span><b>Fit</b>: how well they suit ${esc(S.company.name)}</span><span><b>Quality</b>: are their viewers real and engaged</span>
+      <span><span class="sc quick">00</span> dashed = quick estimate, not yet read by AI</span><span>Hover a score to see why · click a creator for details</span></p>`;
   if (S.mode === "cards" || window.innerWidth < 700) {  // a table doesn't fit a phone
-    grid.className = "cards";
-    grid.innerHTML = data.items.map(cardHtml).join("");
+    grid.className = "";
+    grid.innerHTML = legend + `<div class="posters">${data.items.map(cardHtml).join("")}</div>`;
   } else {
     grid.className = "";
     const all = data.items.length && data.items.every((c) => S.selected.has(c.id));
-    grid.innerHTML = `<p class="legend"><span><b>Fit</b>: how well they suit ${esc(S.company.name)}</span><span><b>Quality</b>: are their viewers real and engaged</span>
-      <span><span class="sc quick">00</span> dashed = quick estimate, not yet read by AI</span><span>Hover a score to see why · click a creator for details</span></p>
+    grid.innerHTML = legend + `
       <div class="table-wrap"><table class="list">
       <thead><tr>
         <th class="c-sel"><input type="checkbox" id="sel-all" ${all ? "checked" : ""} aria-label="Select all on this page"></th>
@@ -741,7 +760,10 @@ function reasonMenu(anchor, onPick) {
     + `<button type="button" data-reason="" class="muted">Skip reason</button>`;
   const host = anchor.closest(".pop-anchor, .p-actions, .bulkbar") || document.body;
   host.append(menu);
-  if (host.classList.contains("p-actions")) menu.style.left = `${anchor.offsetLeft}px`;
+  if (host.classList.contains("p-actions")) {
+    menu.style.left = `${anchor.offsetLeft}px`;
+    menu.style.top = `${anchor.offsetTop + anchor.offsetHeight + 4}px`;
+  }
   menu.onclick = (e) => {
     const b = e.target.closest("[data-reason]");
     if (!b) return;
@@ -818,6 +840,7 @@ function closeDetail() {
 }
 
 function detailClosed() {
+  closePlayer();  // a video must not keep playing in a closed window
   S.panelId = null;
   S.panelData = null;
   $$("#grid [data-id].open").forEach((el) => el.classList.remove("open"));
@@ -892,100 +915,154 @@ function renderDetail(d) {
   }).join("");
   const signals = (auth.signals || []).map((x) => `<li class="${x.kind === "good" ? "plus" : "minus"}"><span class="sign">${x.kind === "good" ? "✓" : "!"}</span><div>${esc(x.text)}</div></li>`).join("");
   const langs = Object.entries(aud.languages || {}).map(([k, v]) => `${esc(S.meta.languages[k] || k)} ${Math.round(v * 100)}%`).join(" · ");
-  const consistency = cr.consistency != null ? `${Math.round(cr.consistency * 100)}% of recent posts reach at least half their average views${cr.views_spread >= 2 ? " (the average is carried by a few hits)" : ""}.` : "";
+  const consistency = d.quality_notes?.consistency?.text || "";
   const warnings = (auth.signals || []).filter((x) => x.kind !== "good").length;
 
+  const cover = c.cover ? `<img src="${esc(c.cover)}" alt="" data-name="${esc(c.name)}">` : placeholder(c.name);
+  const vids = posts.slice(0, 6);
+
   $("#detail").innerHTML = `
-    <div class="d-top">
-      <div class="d-head">
-        ${avatar(c.avatar, c.name)}
-        <div class="d-title">
-          <h2>${esc(c.name)}</h2>
-          <div class="d-sub"><span class="plat plat-${c.platform}">${ICONS[c.platform]}</span><a href="${esc(cr.url)}" target="_blank" rel="noopener">${esc(cr.handle || platform)}</a>
-            <span>${fmtNum(cr.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}</span>${country ? `<span>${esc(country)}</span>` : ""}${lang ? `<span>${esc(lang)}</span>` : ""}</div>
-          <div class="d-badges">${badges(c)}${partner ? `<span class="tag partner">Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? '<span class="tag">Hidden</span>' : ""}</div>
+    <div class="d-grid">
+      <aside class="d-aside">
+        <div class="d-cover">${cover}<span class="plat plat-${c.platform}">${ICONS[c.platform]}</span>${c.is_new ? '<span class="ribbon">NEW</span>' : ""}</div>
+        <div class="p-actions d-actions">
+          <button class="btn ${starred ? "dark" : "primary"}" data-act="panel-star">${starred ? ICONS.starOn + " On shortlist" : ICONS.star + " Add to shortlist"}</button>
+          ${m.status === "hidden" ? `<button class="btn" data-act="panel-unhide">Unhide</button>` : `<button class="btn" data-act="panel-hide">Not a fit ${ICONS.chev}</button>`}
+          <a class="btn" href="${esc(cr.url)}" target="_blank" rel="noopener">${ICONS.ext} Open on ${esc(platform)}</a>
+          ${S.meta.sources.ai ? `<button class="btn ${m.checked === "deep" ? "" : "accent"}" data-act="deep" title="Reads their posts, descriptions and viewer comments, and judges fit like a marketer would (uses the writing AI, about a minute)">${ICONS.sparkle} ${m.checked === "deep" ? "Evaluate again" : "Deep evaluation"}</button>` : ""}
         </div>
-        <div class="d-nav">
-          <button class="icon-btn small" data-act="panel-prev" ${i <= 0 ? "disabled" : ""} title="Previous creator (↑)">${ICONS.up}</button>
-          <button class="icon-btn small" data-act="panel-next" ${i < 0 || i >= S.rows.length - 1 ? "disabled" : ""} title="Next creator (↓)">${ICONS.down}</button>
-          <button class="icon-btn small" data-act="panel-close" title="Close (Esc)">${ICONS.x}</button>
-        </div>
-      </div>
-      <div class="p-actions">
-        <button class="btn ${starred ? "dark" : "primary"}" data-act="panel-star">${starred ? ICONS.starOn + " On shortlist" : ICONS.star + " Add to shortlist"}</button>
-        ${m.status === "hidden" ? `<button class="btn" data-act="panel-unhide">Unhide</button>` : `<button class="btn" data-act="panel-hide">Not a fit ${ICONS.chev}</button>`}
-        <a class="btn" href="${esc(cr.url)}" target="_blank" rel="noopener">${ICONS.ext} Open on ${esc(platform)}</a>
-        <span class="spacer"></span>
-        ${S.meta.sources.ai ? `<button class="btn ${m.checked === "deep" ? "" : "accent"}" data-act="deep" title="Reads their posts, descriptions and viewer comments, and judges fit like a marketer would (uses the writing AI, about a minute)">${ICONS.sparkle} ${m.checked === "deep" ? "Evaluate again" : "Deep evaluation"}</button>` : ""}
-      </div>
-    </div>
+      </aside>
 
-    <div class="d-body">
-      <p class="d-lead">${esc(m.verdict || m.summary)}</p>
-      ${m.audience_note || m.collab_idea ? `<dl class="deep-notes">
-        ${m.audience_note ? `<dt>Audience</dt><dd>${esc(m.audience_note)}</dd>` : ""}
-        ${m.collab_idea ? `<dt>Idea</dt><dd>${esc(m.collab_idea)}</dd>` : ""}
-        ${m.deep?.sponsors_seen?.length ? `<dt>Sponsors</dt><dd>${esc(m.deep.sponsors_seen.join(", "))}</dd>` : ""}</dl>` : ""}
-
-      <div class="d-scores">
-        <div class="scorecard" data-tip="${esc(x.fit || "")}"><b class="${scoreClass(m.fit)}">${m.fit}</b>
-          <div><strong>${fitWord(m.fit)}</strong><small>How well they suit ${esc(S.company.name)}: content, audience, market, brand and cost.</small></div></div>
-        <div class="scorecard" data-tip="${esc(x.quality || "")}"><b class="${scoreClass(m.quality)}">${m.quality}</b>
-          <div><strong>${qualityWord(m.quality)}</strong><small>Whether their viewers are real, engaged and still growing.</small></div></div>
-      </div>
-
-      <div class="glance">
-        <div data-tip="${esc(x.qparts.consistency || "")}"><span>Typical views</span><b>${fmtNum(cr.median_views ?? cr.avg_views)}</b></div>
-        <div data-tip="${esc(`${pct(cr.engagement_rate)} of viewers like or comment\n${x.qparts.engagement || ""}`)}"><span>Engagement vs typical</span><b>${cr.engagement_vs_typical ? `${cr.engagement_vs_typical}×` : pct(cr.engagement_rate)}</b></div>
-        <div data-tip="${esc(x.qparts.momentum || "")}"><span>Views trend</span><b>${trendHtml(cr.views_trend)}</b></div>
-        <div data-tip="Rough estimate: typical views × common rates per 1,000 views. Check with the creator."><span>Est. price / post</span><b>${euro(cr.price)}</b></div>
-      </div>
-
-      <div class="procon">
-        <div><h5>Why they could work</h5>
-          ${pros.length ? `<ul>${pros.map((t) => `<li class="plus">${esc(t)}</li>`).join("")}</ul>` : `<p class="muted small">Nothing stands out yet.</p>`}</div>
-        <div><h5>Watch out</h5>
-          ${cons.length || unchecked.length ? `<ul>${cons.map((t) => `<li class="minus">${esc(t)}</li>`).join("")}${unchecked.map((t) => `<li class="unknown">Not checked yet: ${esc(t[0].toLowerCase() + t.slice(1))}</li>`).join("")}</ul>`
-            : `<p class="muted small">Nothing worrying found in their posts, comments or numbers.</p>`}</div>
-      </div>
-
-      <div class="contact-line">${ICONS.mail}
-        ${firstEmail ? `<code>${esc(firstEmail)}</code><button class="btn small" data-act="copy" data-text="${esc(firstEmail)}">${ICONS.copy} Copy</button>`
-          : `<span class="muted">No public email. Message them on ${esc(platform)}.</span>`}
-        ${agency ? `<span class="tag" title="A company email that isn't the creator's own, or management mentioned in their bio">Likely via agency</span>` : ""}
-        ${Object.entries(cr.socials || {}).map(([k, l]) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS[k] || ICONS.ext} ${esc(k[0].toUpperCase() + k.slice(1))}</a>`).join("")}
-      </div>
-
-      <p class="conf conf-${conf.level}"><span class="dotc"></span>How sure we are: <b>${esc(conf.level)}</b>${conf.notes.length ? ` · ${esc(conf.notes.join(" · "))}` : ""}
-        ${m.checked === "rules" && S.meta.sources.ai ? ` <button class="btn link" data-act="ai-check">Let ${esc(S.meta.ai.label)} read their posts</button>` : ""}</p>
-
-      <div class="sections">
-        ${section("fit", "Fit in detail", `${ev.length} pieces of evidence from their posts and comments`, dims, open)}
-        ${section("quality", "Audience quality in detail", warnings ? `${warnings} warning sign${warnings > 1 ? "s" : ""}` : "no warning signs", `
-          <div class="qparts">${qparts}</div>
-          ${signals ? `<ul class="claims signals">${signals}</ul>` : `<p class="muted small">No warning signs in the numbers we have.</p>`}
-          ${langs ? `<p class="small">Comment languages (${aud.sampled} sampled): ${langs}</p>` : ""}
-          ${consistency ? `<p class="small">${esc(consistency)}</p>` : ""}`, open)}
-        ${section("numbers", "All numbers", `posts ${cr.posts_per_month ?? "—"} times a month`, `
-          <div class="nums">
-            <div><b>${fmtNum(cr.median_views ?? cr.avg_views)}</b><span>median views${cr.views_window ? ` · ${esc(cr.views_window)}` : ""}</span></div>
-            <div><b>${fmtNum(cr.avg_views)}</b><span>average views</span></div>
-            <div><b>${pct(cr.engagement_rate)}</b><span>engagement${cr.engagement_vs_typical ? ` · ${cr.engagement_vs_typical}× typical` : ""}</span></div>
-            <div><b>${trendHtml(cr.views_trend)}</b><span>views, last 30 days vs the 60 before</span></div>
-            <div><b>${cr.posts_per_month ?? "—"}</b><span>posts a month · last post ${daysAgo(cr.days_since_last_post)}</span></div>
-            <div><b>${euro(cr.price)}</b><span>estimated price per post</span></div>
+      <div class="d-main">
+        <div class="d-head">
+          <div class="d-title">
+            <h2>${esc(c.name)}</h2>
+            <div class="d-sub"><span class="plat-inline plat-${c.platform}">${ICONS[c.platform]}</span><a href="${esc(cr.url)}" target="_blank" rel="noopener">${esc(cr.handle || platform)}</a>
+              <span>${fmtNum(cr.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}</span>${country ? `<span>${esc(country)}</span>` : ""}${lang ? `<span>${esc(lang)}</span>` : ""}</div>
+            <div class="d-badges">${badges(c).replace('<span class="tag new">New</span>', "")}${partner ? `<span class="tag partner">🤝 Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? '<span class="tag">Hidden</span>' : ""}</div>
           </div>
-          ${linked.length ? `<div class="also">${linked.map((o) => `<a href="${esc(o.url)}" target="_blank" rel="noopener">${ICONS[o.platform]} Also on ${esc(S.meta.platforms[o.platform])}: ${fmtNum(o.followers)}${o.avg_views != null ? ` · ${fmtNum(o.avg_views)} views` : ""}</a>`).join("")}</div>` : ""}`, open)}
-        ${posts.length ? section("posts", "Recent posts", `${posts.length} latest`, `<ul class="postlist">
-          ${posts.map((p, k) => `<li><a href="${esc(p.url || cr.url)}" target="_blank" rel="noopener"><span class="pref">p${k + 1}</span><span class="ptitle">${esc(p.title || "(no title)")}</span>
-            <span class="pviews">${p.views != null ? fmtNum(p.views) + " views" : fmtNum(p.likes) + " likes"}</span></a></li>`).join("")}</ul>`, open) : ""}
-        ${section("outreach", "First message", m.pitch ? "drafted" : `drafted by AI in ${esc(lang || "their language")}`,
-          `<div id="pitch-area">${m.pitch ? pitchHtml(m.pitch, cr) : `<button class="btn" data-act="pitch">${ICONS.mail} Draft a message in ${esc(lang || "their language")}</button>`}</div>`, open)}
-      </div>
+          <div class="d-nav">
+            <button class="icon-btn small" data-act="panel-prev" ${i <= 0 ? "disabled" : ""} title="Previous creator (↑)">${ICONS.up}</button>
+            <button class="icon-btn small" data-act="panel-next" ${i < 0 || i >= S.rows.length - 1 ? "disabled" : ""} title="Next creator (↓)">${ICONS.down}</button>
+            <button class="icon-btn small" data-act="panel-close" title="Close (Esc)">${ICONS.x}</button>
+          </div>
+        </div>
 
-      ${cr.found_via?.length ? `<p class="via">Found via ${cr.found_via.map(esc).join(" · ")}</p>` : ""}
+        <div class="d-body">
+          <p class="d-lead">${esc(m.verdict || m.summary)}</p>
+          ${m.audience_note || m.collab_idea ? `<dl class="deep-notes">
+            ${m.audience_note ? `<dt>Audience</dt><dd>${esc(m.audience_note)}</dd>` : ""}
+            ${m.collab_idea ? `<dt>Idea</dt><dd>${esc(m.collab_idea)}</dd>` : ""}
+            ${m.deep?.sponsors_seen?.length ? `<dt>Sponsors</dt><dd>${esc(m.deep.sponsors_seen.join(", "))}</dd>` : ""}</dl>` : ""}
+
+          <div class="d-scores">
+            <div class="scorecard" data-tip="${esc(x.fit || "")}"><b class="${scoreClass(m.fit)}">${m.fit}</b>
+              <div><strong>${fitWord(m.fit)}</strong><small>How well they suit ${esc(S.company.name)}: content, audience, market, brand and cost.</small></div></div>
+            <div class="scorecard" data-tip="${esc(x.quality || "")}"><b class="${scoreClass(m.quality)}">${m.quality}</b>
+              <div><strong>${qualityWord(m.quality)}</strong><small>Whether their viewers are real, engaged and still growing.</small></div></div>
+          </div>
+
+          <div class="glance">
+            <div data-tip="${esc(x.qparts.consistency || "")}"><span>Typical views</span><b>${fmtNum(cr.median_views ?? cr.avg_views)}</b></div>
+            <div data-tip="${esc(`${pct(cr.engagement_rate)} of viewers like or comment\n${x.qparts.engagement || ""}`)}"><span>Engagement vs typical</span><b>${cr.engagement_vs_typical ? `${cr.engagement_vs_typical}×` : pct(cr.engagement_rate)}</b></div>
+            <div data-tip="${esc(x.qparts.momentum || "")}"><span>Views trend</span><b>${trendHtml(cr.views_trend)}</b></div>
+            <div data-tip="Rough estimate: typical views × common rates per 1,000 views. Check with the creator."><span>Est. price / post</span><b>${euro(cr.price)}</b></div>
+          </div>
+
+          <div class="procon">
+            <div><h5>Why they could work</h5>
+              ${pros.length ? `<ul>${pros.map((t) => `<li class="plus">${esc(t)}</li>`).join("")}</ul>` : `<p class="muted small">Nothing stands out yet.</p>`}</div>
+            <div><h5>Watch out</h5>
+              ${cons.length || unchecked.length ? `<ul>${cons.map((t) => `<li class="minus">${esc(t)}</li>`).join("")}${unchecked.map((t) => `<li class="unknown">Not checked yet: ${esc(t[0].toLowerCase() + t.slice(1))}</li>`).join("")}</ul>`
+                : `<p class="muted small">Nothing worrying found in their posts, comments or numbers.</p>`}</div>
+          </div>
+
+          ${vids.length ? `<div class="videos">
+            <h5>Recent videos <span class="muted">· click one to watch it here</span></h5>
+            <div id="player" hidden></div>
+            <div class="vids vids-${c.platform}">${vids.map((p, k) => `
+              <button type="button" class="vid" data-play="${k}" title="${esc(p.title || "")}">
+                ${p.thumb ? `<img src="${esc(p.thumb)}" alt="" loading="lazy">` : `<span class="vid-title">${esc((p.title || "").slice(0, 80))}</span>`}
+                <span class="vid-play">▶</span>
+                <span class="vid-meta">${p.views != null ? fmtNum(p.views) + " views" : fmtNum(p.likes) + " likes"}${p.is_short ? " · Short" : ""}</span>
+              </button>`).join("")}</div>
+          </div>` : ""}
+
+          <div class="contact-line">${ICONS.mail}
+            ${firstEmail ? `<code>${esc(firstEmail)}</code><button class="btn small" data-act="copy" data-text="${esc(firstEmail)}">${ICONS.copy} Copy</button>`
+              : `<span class="muted">No public email. Message them on ${esc(platform)}.</span>`}
+            ${agency ? `<span class="tag" title="A company email that isn't the creator's own, or management mentioned in their bio">Likely via agency</span>` : ""}
+            ${Object.entries(cr.socials || {}).map(([k, l]) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS[k] || ICONS.ext} ${esc(k[0].toUpperCase() + k.slice(1))}</a>`).join("")}
+          </div>
+
+          <p class="conf conf-${conf.level}"><span class="dotc"></span>How sure we are: <b>${esc(conf.level)}</b>${conf.notes.length ? ` · ${esc(conf.notes.join(" · "))}` : ""}
+            ${m.checked === "rules" && S.meta.sources.ai ? ` <button class="btn link" data-act="ai-check">Let ${esc(S.meta.ai.label)} read their posts</button>` : ""}</p>
+
+          <div class="sections">
+            ${section("fit", "Fit in detail", `${ev.length} pieces of evidence from their posts and comments`, dims, open)}
+            ${section("quality", "Audience quality in detail", warnings ? `${warnings} warning sign${warnings > 1 ? "s" : ""}` : "no warning signs", `
+              <div class="qparts">${qparts}</div>
+              ${signals ? `<ul class="claims signals">${signals}</ul>` : `<p class="muted small">No warning signs in the numbers we have.</p>`}
+              ${langs ? `<p class="small">Comment languages (${aud.sampled} sampled): ${langs}</p>` : ""}
+              ${consistency ? `<p class="small">${esc(consistency)}.</p>` : ""}`, open)}
+            ${section("numbers", "All numbers", `posts ${cr.posts_per_month ?? "—"} times a month`, `
+              <div class="nums">
+                <div><b>${fmtNum(cr.median_views ?? cr.avg_views)}</b><span>median views${cr.views_window ? ` · ${esc(cr.views_window)}` : ""}</span></div>
+                <div><b>${fmtNum(cr.avg_views)}</b><span>average views</span></div>
+                <div><b>${pct(cr.engagement_rate)}</b><span>engagement${cr.engagement_vs_typical ? ` · ${cr.engagement_vs_typical}× typical` : ""}</span></div>
+                <div><b>${trendHtml(cr.views_trend)}</b><span>views, last 30 days vs the 60 before</span></div>
+                <div><b>${cr.posts_per_month ?? "—"}</b><span>posts a month · last post ${daysAgo(cr.days_since_last_post)}</span></div>
+                <div><b>${euro(cr.price)}</b><span>estimated price per post</span></div>
+              </div>
+              ${linked.length ? `<div class="also">${linked.map((o) => `<a href="${esc(o.url)}" target="_blank" rel="noopener">${ICONS[o.platform]} Also on ${esc(S.meta.platforms[o.platform])}: ${fmtNum(o.followers)}${o.avg_views != null ? ` · ${fmtNum(o.avg_views)} views` : ""}</a>`).join("")}</div>` : ""}`, open)}
+            ${section("outreach", "First message", m.pitch ? "drafted" : `drafted by AI in ${esc(lang || "their language")}`,
+              `<div id="pitch-area">${m.pitch ? pitchHtml(m.pitch, cr) : `<button class="btn" data-act="pitch">${ICONS.mail} Draft a message in ${esc(lang || "their language")}</button>`}</div>`, open)}
+          </div>
+
+          ${cr.found_via?.length ? `<p class="via">Found via ${cr.found_via.map(esc).join(" · ")}</p>` : ""}
+        </div>
+      </div>
     </div>`;
   $$("#detail details.sec").forEach((el) => el.addEventListener("toggle", () => rememberSection(el)));
+}
+
+// Watch a recent video inside the window (YouTube and TikTok embeds); anything else opens on the platform.
+function embedUrl(p, platform) {
+  const url = p.url || "";
+  if (platform === "youtube") {
+    const id = url.match(/[?&]v=([\w-]{6,})/)?.[1];
+    return id ? `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0` : null;
+  }
+  if (platform === "tiktok") {
+    const id = url.match(/\/video\/(\d+)/)?.[1];
+    return id ? `https://www.tiktok.com/embed/v2/${id}` : null;
+  }
+  return null;
+}
+
+function playVideo(k) {
+  const cr = S.panelData?.creator;
+  const p = cr?.recent_posts?.[k];
+  if (!p) return;
+  const src = embedUrl(p, cr.platform);
+  if (!src) { window.open(p.url || cr.url, "_blank", "noopener"); return; }
+  const player = $("#player");
+  player.hidden = false;
+  player.className = `player player-${cr.platform}`;
+  player.innerHTML = `<div class="player-frame"><iframe src="${esc(src)}" title="${esc(p.title || "Video")}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
+    <div class="player-bar"><span class="player-title">${esc(p.title || "")}</span>
+      <a class="btn small" href="${esc(p.url)}" target="_blank" rel="noopener">${ICONS.ext} Open on ${esc(S.meta.platforms[cr.platform])}</a>
+      <button class="btn small" data-act="close-player">Close</button></div>`;
+  $$("#detail .vid").forEach((v) => v.classList.toggle("playing", +v.dataset.play === k));
+  player.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function closePlayer() {
+  const player = $("#player");
+  if (!player) return;
+  player.hidden = true;
+  player.innerHTML = "";  // stops the video
+  $$("#detail .vid.playing").forEach((v) => v.classList.remove("playing"));
 }
 
 function pitchHtml(p, cr) {
@@ -1411,7 +1488,7 @@ function refresh() {
 
 function setMode(mode) {
   S.mode = mode;
-  try { localStorage.setItem("scout.mode", mode); } catch { /* storage blocked */ }
+  try { localStorage.setItem("scout.layout", mode); } catch { /* storage blocked */ }
   $$("#view-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
   loadCreators();
 }
@@ -1565,6 +1642,8 @@ function bindEvents() {
     }
     const star = e.target.closest("[data-star]");
     if (star) { toggleStar(star.dataset.star); return; }
+    const vid = e.target.closest("[data-play]");
+    if (vid) { playVideo(+vid.dataset.play); return; }
     const row = e.target.closest("#grid [data-id], #shortlist [data-id]");
     if (row && !e.target.closest("[data-select], .c-sel, a, select, button")) {
       S.cursor = S.rows.findIndex((c) => c.id === row.dataset.id);
@@ -1622,6 +1701,7 @@ function bindEvents() {
     else if (act === "bulk-hide-menu") reasonMenu(actEl, (r) => bulkStatus("hidden", r));
     else if (act === "bulk-clear") { S.selected.clear(); renderBulk(); loadCreators({ quiet: true }); }
     else if (act === "panel-close") closeDetail();
+    else if (act === "close-player") closePlayer();
     else if (act === "panel-prev") moveCursor(-1);
     else if (act === "panel-next") moveCursor(1);
     else if (act === "panel-star") toggleStar(S.panelId);
@@ -1654,7 +1734,7 @@ function bindEvents() {
 // ---------- Boot ----------
 (async function init() {
   bindEvents();
-  try { S.mode = localStorage.getItem("scout.mode") || "table"; } catch { /* storage blocked */ }
+  try { S.mode = localStorage.getItem("scout.layout") || "cards"; } catch { /* storage blocked */ }
   $$("#view-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
   try {
     [S.meta, S.companies] = await Promise.all([api("/api/meta"), api("/api/companies")]);
