@@ -582,11 +582,29 @@ function scoreHtml(value, c, kind) {
   return ringHtml(value, "xs", { quick: c.checked === "rules", low: c.confidence === "low", tip });
 }
 
-function badges(c) {
+// Short hover explanations for badges, about this creator where we can (first line is the heading).
+function badgeTip(kind, c = {}) {
+  const lines = {
+    gem: ["Hidden gem", "Small but strong: under 50k followers, yet on-niche, engaged and real. Often better value than bigger creators.",
+      c.followers != null ? `+ ${fmtNum(c.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}` : "",
+      c.engagement_vs_typical ? `+ Engagement ${c.engagement_vs_typical}× typical for their size` : "",
+      c.authenticity != null ? `+ Authenticity ${c.authenticity}` : ""],
+    partner: ["Past partner", `${S.company?.name || "You"} worked with them before${typeof c.partner === "string" ? ` (latest: ${c.partner})` : ""}.`,
+      "From the collaboration tracker in Brand profile."],
+    deep: ["Evaluated", "An AI read their posts, descriptions and viewer comments in depth. The verdict is in their window."],
+    agency: ["Likely via agency", "A company email that isn't the creator's own, or management mentioned in their bio. A guess: check before outreach."],
+    hidden: ["Hidden", "You marked them as not a fit. They stay out of results unless \"Show hidden\" is on."],
+    short: ["Short", "A vertical video under a minute (YouTube Shorts). Shorts usually get fewer views per follower."],
+  }[kind] || [];
+  return lines.filter(Boolean).join("\n");
+}
+const tipAttr = (kind, c) => `data-tip="${esc(badgeTip(kind, c))}"`;
+
+function badges(c, { partner = true } = {}) {
   return [
-    c.partner ? `<span class="tag partner" title="${esc(`Worked with ${S.company.name} before${c.partner === true ? "" : ` (latest: ${c.partner})`}`)}">🤝 Past partner</span>` : "",
-    c.hidden_gem ? '<span class="tag gem" title="Small, highly engaged, on-niche and authentic">💎 Gem</span>' : "",
-    c.checked === "deep" ? '<span class="tag deep" title="Deep evaluation done">✦ Evaluated</span>' : "",
+    partner && c.partner ? `<span class="tag partner" ${tipAttr("partner", c)}>🤝 Past partner</span>` : "",
+    c.hidden_gem ? `<span class="tag gem" ${tipAttr("gem", c)}>💎 Gem</span>` : "",
+    c.checked === "deep" ? `<span class="tag deep" ${tipAttr("deep", c)}>✦ Evaluated</span>` : "",
   ].join("");
 }
 
@@ -624,7 +642,7 @@ function modernCardHtml(c, i) {
   const meta = [`${fmtNum(c.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}`, S.meta.markets[c.country]?.name || c.country, c.niche].filter(Boolean).join(" · ");
   const score = (label, value, kind, word) => `<span class="mscore" data-tip="${esc(c.tips?.[kind] || "")}">${ringHtml(value, "sm", { quick: c.checked === "rules" })}
     <span><b>${label}</b><small>${word}</small></span></span>`;
-  const tags = `${c.hidden_gem ? '<span class="mpill gem">Hidden gem</span>' : ""}${c.partner ? '<span class="mpill partner">Past partner</span>' : ""}`;
+  const tags = `${c.hidden_gem ? `<span class="mpill gem" ${tipAttr("gem", c)}>Hidden gem</span>` : ""}${c.partner ? `<span class="mpill partner" ${tipAttr("partner", c)}>Past partner</span>` : ""}${c.checked === "deep" ? `<span class="mpill" ${tipAttr("deep", c)}>✦ Evaluated</span>` : ""}`;
   return `<article class="card mcard ${i === S.cursor ? "cur" : ""} ${S.panelId === c.id ? "open" : ""}" data-id="${esc(c.id)}" data-i="${i}" tabindex="0" aria-label="${esc(c.name)}, fit ${c.fit}, quality ${c.quality}">
     <div class="mcard-img">${img}
       <span class="mplat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
@@ -652,8 +670,8 @@ function cardHtml(c, i) {
       <span class="plat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
       <span class="pills">${pillHtml("Fit", c.fit, c, "fit")}${pillHtml("Quality", c.quality, c, "quality")}</span>
       <span class="badges">
-        ${c.partner ? `<span class="badge" title="${esc(`Worked with ${S.company.name} before`)}">🤝</span>` : ""}
-        ${c.hidden_gem ? '<span class="badge" title="Hidden gem: small, highly engaged, on-niche and authentic">💎</span>' : ""}
+        ${c.partner ? `<span class="badge" ${tipAttr("partner", c)}>🤝</span>` : ""}
+        ${c.hidden_gem ? `<span class="badge" ${tipAttr("gem", c)}>💎</span>` : ""}
         <button class="badge star ${starred ? "on" : ""}" data-star="${esc(c.id)}" title="${starred ? "On your shortlist" : "Add to shortlist"} (s)" aria-label="Shortlist">${starred ? ICONS.starOn : ICONS.star}</button>
       </span>
       <div class="hover">
@@ -976,7 +994,7 @@ function renderDetail(d) {
             <h2>${nameLink(c)}</h2>
             <div class="d-sub"><span class="plat-inline plat-${c.platform}">${ICONS[c.platform]}</span><a href="${esc(cr.url)}" target="_blank" rel="noopener">${esc(cr.handle || platform)}</a>
               <span>${fmtNum(cr.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}</span>${country ? `<span>${esc(country)}</span>` : ""}${lang ? `<span>${esc(lang)}</span>` : ""}</div>
-            <div class="d-badges">${badges(c)}${partner ? `<span class="tag partner">🤝 Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? '<span class="tag">Hidden</span>' : ""}</div>
+            <div class="d-badges">${badges(c, { partner: false })}${partner ? `<span class="tag partner" ${tipAttr("partner", c)}>🤝 Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? `<span class="tag" ${tipAttr("hidden", c)}>Hidden</span>` : ""}</div>
           </div>
           <div class="d-nav">
             <button class="icon-btn small" data-act="panel-prev" ${i <= 0 ? "disabled" : ""} title="Previous creator (↑)">${ICONS.up}</button>
@@ -1028,7 +1046,7 @@ function renderDetail(d) {
           <div class="contact-line">${ICONS.mail}
             ${firstEmail ? `<code>${esc(firstEmail)}</code><button class="btn small" data-act="copy" data-text="${esc(firstEmail)}">${ICONS.copy} Copy</button>`
               : `<span class="muted">No public email. Message them on ${esc(platform)}.</span>`}
-            ${agency ? `<span class="tag" title="A company email that isn't the creator's own, or management mentioned in their bio">Likely via agency</span>` : ""}
+            ${agency ? `<span class="tag" ${tipAttr("agency", c)}>Likely via agency</span>` : ""}
             ${Object.entries(cr.socials || {}).map(([k, l]) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS[k] || ICONS.ext} ${esc(k[0].toUpperCase() + k.slice(1))}</a>`).join("")}
           </div>
 
@@ -1209,7 +1227,7 @@ function renderStats(d) {
         <div class="table-wrap"><table>
           <thead><tr><th>Date</th><th>Post</th><th class="num">Views</th><th class="num">Likes</th><th class="num">Comments</th><th class="num">Engagement</th></tr></thead>
           <tbody>${posts.slice().reverse().map((p) => `<tr><td>${esc(fmtDay(p.date))}</td>
-            <td class="s-post"><a href="${esc(p.url || cr.url)}" target="_blank" rel="noopener">${esc(p.title || "(no title)")}</a>${p.is_short ? ' <span class="tag">Short</span>' : ""}</td>
+            <td class="s-post"><a href="${esc(p.url || cr.url)}" target="_blank" rel="noopener">${esc(p.title || "(no title)")}</a>${p.is_short ? ` <span class="tag" ${tipAttr("short")}>Short</span>` : ""}</td>
             <td class="num">${fmtFull(p.views)}</td><td class="num">${p.likes != null ? fmtFull(p.likes) : "—"}</td>
             <td class="num">${p.comments != null ? fmtFull(p.comments) : "—"}</td><td class="num">${typeof p.likes === "number" && p.views ? eng(p).toFixed(1) + "%" : "—"}</td></tr>`).join("")}</tbody>
         </table></div>
