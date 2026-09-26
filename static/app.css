@@ -81,6 +81,7 @@ kbd {
 }
 .brand:hover .brand-mark { transform: rotate(8deg) scale(1.08); }
 .brand-name { font-family: var(--font-display); font-size: 27px; letter-spacing: 1.5px; line-height: 1; text-transform: uppercase; }
+.brand-co { display: none; }  /* "prenew" shows only in the modern look */
 .tabs { display: flex; gap: 2px; }
 .tab {
   border: 0; background: none; padding: 7px 12px; border-radius: 8px; cursor: pointer;
@@ -988,12 +989,10 @@ html[data-ui="modern"] body { font-family: "Plus Jakarta Sans", "Inter", system-
 
 /* Top bar */
 html[data-ui="modern"] .topbar { background: var(--glass); backdrop-filter: blur(10px); border-bottom-color: var(--line); }
-html[data-ui="modern"] .brand-mark {
-  width: 30px; height: 30px; border-radius: 9px; transform: none; box-shadow: none;
-  font-family: var(--font-display); font-weight: 800; font-size: 17px;
-}
-html[data-ui="modern"] .brand:hover .brand-mark { transform: none; }
-html[data-ui="modern"] .brand-name { font-weight: 800; font-size: 22px; letter-spacing: -.03em; text-transform: none; }
+/* Modern: no "S" mark, just the word mark "prenew scout", all lowercase */
+html[data-ui="modern"] .brand-mark { display: none; }
+html[data-ui="modern"] .brand-name { font-weight: 800; font-size: 22px; letter-spacing: -.03em; text-transform: lowercase; white-space: nowrap; }
+html[data-ui="modern"] .brand-co { display: inline; }
 html[data-ui="modern"] .tab { border-radius: 999px; padding: 8px 14px; }
 html[data-ui="modern"] .company-btn, html[data-ui="modern"] .icon-btn { border-radius: 999px; }
 html[data-ui="modern"] .count { background: var(--accent); color: #fff; }
@@ -1130,6 +1129,12 @@ html[data-ui="modern"] .field textarea, html[data-ui="modern"] .field input[type
   html[data-ui="modern"] .s-title h2 { font-size: 22px; }
   html[data-ui="modern"] .tab { padding: 6px 9px; }
   html[data-ui="modern"] .company-btn { padding: 5px 9px; }
-  html[data-ui="modern"] .brand-mark { width: 28px; height: 28px; }
+  html[data-ui="modern"] .brand-name { display: inline; font-size: 17px; }
   .ui-switch { display: none; }
+}
+/* Phones: "prenew scout" needs room, so the Discover / Shortlist tabs move to a second row */
+@media (max-width: 560px) {
+  html[data-ui="modern"] .topbar-inner { flex-wrap: wrap; height: auto; padding: 10px 12px 8px; row-gap: 8px; }
+  html[data-ui="modern"] .tabs { order: 5; width: 100%; }
+  html[data-ui="modern"] .tabs .tab { flex: 1; justify-content: center; text-align: center; }
 }
