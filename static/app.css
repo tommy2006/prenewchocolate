@@ -992,7 +992,7 @@ html[data-ui="modern"] .topbar { background: var(--glass); backdrop-filter: blur
 /* Modern: no "S" mark, just the word mark "prenew" stacked over "scout", all lowercase */
 html[data-ui="modern"] .brand-mark { display: none; }
 html[data-ui="modern"] .brand-name {
-  display: inline-flex; flex-direction: column; font-weight: 800; font-size: 21px; line-height: .98; letter-spacing: -.03em;
+  display: inline-flex; flex-direction: column; font-weight: 800; font-size: 21px; line-height: .84; letter-spacing: -.03em;
   text-transform: lowercase; white-space: nowrap;
 }
 html[data-ui="modern"] .brand-co { display: block; }
