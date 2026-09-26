@@ -39,7 +39,10 @@ Scout automates influencer discovery for brands like Prenew, with a focus on mic
      curve: only a doubling gets past 90). Scores of 100 are rare by design: most creators have something to improve.
 
    Every part comes with **evidence**: short claims that cite the posts (and quote the comments) they're based on.
-   The AI must cite post and comment references; a claim citing a post that doesn't exist is dropped. A
+   The AI must cite post and comment references; a claim citing a post that doesn't exist is dropped.
+   Every part says where its number comes from: the AI has to back each of the five parts with a claim, a part the
+   AI scored without citing anything counts as at most 70 (shown as "The AI rated this 80 but cited no post or
+   comment"), and a starting value that nothing has changed yet says so. A
    **confidence** level says how much data the scores rest on. Rules score everyone at once for free; the search AI
    re-checks the most promising (12 per search on a laptop model, 40 on a cloud AI, all of them on your own GPU server). **Deep evaluation** (one click,
    uses the writing AI) reads descriptions and up to 30 comments and writes a verdict, who the audience likely is,

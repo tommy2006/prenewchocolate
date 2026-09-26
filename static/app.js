@@ -926,7 +926,8 @@ function detailClosed() {
 function claimHtml(e) {
   const cites = (e.posts || []).map((p) => `<a href="${esc(p.url)}" target="_blank" rel="noopener" title="Open this post">${esc(p.title || "post")}</a>`).join("");
   const quotes = (e.quotes || []).map((q) => `<q>${esc(q)}</q>`).join("");
-  return `<li class="${e.sign === "-" ? "minus" : "plus"}"><span class="sign">${e.sign === "-" ? "−" : "+"}</span>
+  const [cls, mark] = { "-": ["minus", "−"], "?": ["unknown", "?"] }[e.sign] || ["plus", "+"];
+  return `<li class="${cls}"><span class="sign">${mark}</span>
     <div>${esc(e.text)}${cites ? `<div class="cites">${cites}</div>` : ""}${quotes}</div></li>`;
 }
 
@@ -972,7 +973,7 @@ function renderDetail(d) {
   // The summary: the strongest reasons for, the concerns, and what hasn't been checked yet.
   const x = d.explain || { parts: {}, qparts: {} };
   const qn = Object.values(d.quality_notes || {});
-  const pros = ev.filter((e) => e.sign !== "-")
+  const pros = ev.filter((e) => e.sign === "+")
     .sort((a, b) => (b.src === "ai") - (a.src === "ai") || DIM_ORDER.indexOf(a.dim) - DIM_ORDER.indexOf(b.dim))
     .map((e) => e.text).concat(qn.filter((n) => n.sign === "+").map((n) => n.text)).slice(0, 3);
   const cons = ev.filter((e) => e.sign === "-").map((e) => e.text)
@@ -1078,7 +1079,7 @@ function renderDetail(d) {
             ${m.checked === "rules" && S.meta.sources.ai ? ` <button class="btn link" data-act="ai-check">Let ${esc(S.meta.ai.label)} read their posts</button>` : ""}</p>
 
           <div class="sections">
-            ${section("fit", "Fit in detail", `${ev.length} pieces of evidence from their posts and comments`, dims, open)}
+            ${section("fit", "Fit in detail", `${ev.filter((e) => e.sign !== "?").length} pieces of evidence from their posts, comments and numbers`, dims, open)}
             ${section("quality", "Audience quality in detail", warnings ? `${warnings} warning sign${warnings > 1 ? "s" : ""}` : "no warning signs", `
               <div class="qparts">${qparts}</div>
               ${signals ? `<ul class="claims signals">${signals}</ul>` : `<p class="muted small">No warning signs in the numbers we have.</p>`}

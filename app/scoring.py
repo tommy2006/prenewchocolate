@@ -32,7 +32,8 @@ GOALS = {
 }
 
 
-VERSION = 2  # bump when scores are computed differently, so saved matches are re-scored on start
+VERSION = 3  # bump when scores are computed differently, so saved matches are re-scored on start
+UNPROVEN_MAX = 70  # a fit part with nothing cited behind it can't count as strong
 
 
 def clamp(value, default: int = 0) -> int:
@@ -134,6 +135,37 @@ def evidence_item(dim: str, sign: str, text: str, posts: list[dict] | None = Non
     return {"dim": dim, "sign": sign, "text": text, "posts": posts or [], "quotes": quotes or [], "src": src, "fact": fact}
 
 
+NEUTRAL_BASIS = {
+    "content": "Nothing in their recent posts shows this either way yet",
+    "audience": "Nothing yet shows who watches (age, interests, buying intent): a neutral starting value",
+    "market": "Where they and their viewers are isn't clear yet: a neutral starting value",
+    "brand": "Nothing in their recent posts shows this either way yet",
+    "readiness": "Nothing yet shows how ready they are for a collaboration: a neutral starting value",
+}
+
+
+def hold_back_unproven(parts: dict, evidence: list[dict], ai: bool, raw: dict | None = None) -> tuple[dict, list, dict]:
+    """Every fit part should say where its number comes from. A part with no claim behind it gets a "?" line
+    saying so, and an AI score above UNPROVEN_MAX with nothing cited counts as UNPROVEN_MAX until there's
+    evidence. Returns (parts, extra evidence, {part: the AI's own number} for the ones held back).
+    `raw`: numbers held back earlier (re-scoring keeps the AI's original judgement)."""
+    have = {e["dim"] for e in evidence if e.get("sign") in ("+", "-")}
+    parts, notes, held = dict(parts), [], {}
+    for dim in FIT_PARTS:
+        if dim in have:
+            continue
+        value = (raw or {}).get(dim, parts[dim])
+        if ai and value > UNPROVEN_MAX:
+            parts[dim], held[dim] = UNPROVEN_MAX, value
+            text = f"The AI rated this {value} but cited no post or comment: counted as {UNPROVEN_MAX} until there's evidence"
+        elif ai:
+            text = "The AI's overall judgement: it cited no post or comment for this"
+        else:
+            text = NEUTRAL_BASIS[dim]
+        notes.append(evidence_item(dim, "?", text, src="basis", fact=False))
+    return parts, notes, held
+
+
 def cite(posts: list[dict], limit: int = 3) -> list[dict]:
     return [{"title": (p.get("title") or "")[:100], "url": p.get("url")} for p in posts[:limit] if p.get("url")]
 
@@ -197,7 +229,7 @@ def quality_notes(c: dict) -> dict:
 
 def _sorted_pros(evidence: list[dict]) -> list[dict]:
     order = ["content", "audience", "market", "readiness", "brand"]
-    return sorted((e for e in evidence if e["sign"] != "-"),
+    return sorted((e for e in evidence if e["sign"] == "+"),
                   key=lambda e: (e.get("src") != "ai", order.index(e["dim"]) if e["dim"] in order else 9))
 
 
@@ -225,7 +257,7 @@ def explain(c: dict, m: dict) -> dict:
     for dim in FIT_PARTS:
         claims = [e for e in ev if e["dim"] == dim]
         claims.sort(key=lambda e: e["sign"] != "-")  # a concern first: it explains why it isn't 100
-        parts[dim] = "\n".join(("- " if e["sign"] == "-" else "+ ") + _clip(e["text"], 70) for e in claims[:2]) \
+        parts[dim] = "\n".join({"-": "- ", "?": "? "}.get(e["sign"], "+ ") + _clip(e["text"], 70) for e in claims[:2]) \
             or "? No specific evidence either way"
     return {
         "fit": "\n".join([f"{fit_word(m.get('fit', 0))} · {m.get('fit', 0)}"] + fit_lines),

@@ -624,6 +624,8 @@ th.num { text-align: right; }
 .claims .sign { font-weight: 700; text-align: center; }
 .claims .plus .sign { color: var(--good); }
 .claims .minus .sign { color: var(--bad); }
+.claims .unknown { color: var(--muted); }
+.claims .unknown .sign { color: var(--muted); }
 .cites { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
 .cites a {
   font-size: 12px; color: var(--muted); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

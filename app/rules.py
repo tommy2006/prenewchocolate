@@ -248,6 +248,9 @@ def quick_score(c: dict, company: dict, search: dict) -> dict:
             brand += 10
             ev.append(scoring.evidence_item("brand", "+", f"Has mentioned {company['name']} before", scoring.cite(own)))
     brand = max(0, min(100, min(brand, safety + 10)))
+    checked_posts = len(c.get("recent_posts") or [])
+    if checked_posts and not any(e["dim"] == "brand" for e in ev):
+        ev.append(scoring.evidence_item("brand", "+", f"No gambling, adult content or competitor mentions in their last {checked_posts} posts"))
 
     # Readiness & cost: can we work with them, and can we afford them?
     readiness = 50

@@ -556,7 +556,7 @@ Also return:
 - niche: their main content category in 1-3 words. games: titles of the games they mainly cover (empty if none).
 - tags: 3 to 5 short content tags (Title Case), most specific first.
 - matched_tags: which of the search's "creator types wanted" they genuinely fit, copied exactly. Empty if none.
-- evidence: 3 to 6 claims behind your scores. Each has dim (one of content, audience, market, brand, readiness), sign ("+" helps the fit, "-" hurts it), claim (one short sentence in English), and posts: the refs of the posts that show it (e.g. ["p1", "p4"]), plus comments: refs of comments that show it (e.g. ["c2"]). Cite only refs that appear in the data. Every claim about content, audience or brand must cite at least one post or comment.
+- evidence: 5 to 8 claims behind your scores, at least one for each of the five parts (content, audience, market, brand, readiness). If the data says little about a part, say what is missing in that claim and keep that score middling (50-70) rather than guessing high. Each claim has dim (one of content, audience, market, brand, readiness), sign ("+" helps the fit, "-" hurts it), claim (one short sentence in English), and posts: the refs of the posts that show it (e.g. ["p1", "p4"]), plus comments: refs of comments that show it (e.g. ["c2"]). Cite only refs that appear in the data. Every claim about content, audience or brand must cite at least one post or comment.
 - competitor_sponsor: true only if they appear sponsored by one of the brand's competitors, or are themselves a shop selling the same products.
 
 Judge only from the data provided and never invent facts. Return one result per creator, using the creator's id."""
@@ -774,7 +774,7 @@ Return:
 - collab_idea: one concrete collaboration idea that would feel natural for this creator and this brand.
 - sponsors_seen: brand names they have promoted recently (empty if none).
 - summary, niche, games, tags: as usual.
-- evidence: 4 to 8 claims (dim, sign, claim, posts, comments), each citing the refs (p1.., c1..) that show it. Never cite refs that don't exist. Include the weaknesses too: a score below 100 should have a "-" claim that says why.
+- evidence: 5 to 8 claims (dim, sign, claim, posts, comments), at least one for each of the five parts, each citing the refs (p1.., c1..) that show it. Never cite refs that don't exist. Include the weaknesses too: a score below 100 should have a "-" claim that says why.
 Use the whole 0-100 range: reserve 90+ for strong evidence, and give 100 only when there is truly nothing to improve.
 - competitor_sponsor: true only if sponsored by one of the brand's competitors.
 Judge only from the data provided and never invent facts."""

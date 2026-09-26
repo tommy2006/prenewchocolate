@@ -59,9 +59,11 @@ def build_match(creator: dict, r: dict, job_id: str, markets: list[str] | None, 
     safety = scoring.clamp(r.get("brand_safety"), 100)
     competitor = bool(r.get("competitor_sponsor"))
     q_parts = scoring.quality_parts(creator)
-    fit, quality = scoring.fit(parts, goal, competitor, safety), scoring.quality(q_parts)
     checked = "deep" if r.get("ai_checked") == "deep" else "ai" if r.get("ai_checked") else "rules"
-    evidence = r.get("evidence") or []
+    evidence = [e for e in r.get("evidence") or [] if e.get("src") != "basis"]
+    parts, basis, held = scoring.hold_back_unproven(parts, evidence, checked != "rules", r.get("unproven"))
+    evidence = evidence + basis
+    fit, quality = scoring.fit(parts, goal, competitor, safety), scoring.quality(q_parts)
     auth = creator.get("authenticity") or {}
     followers = creator.get("followers") or 0
     return {
@@ -69,6 +71,7 @@ def build_match(creator: dict, r: dict, job_id: str, markets: list[str] | None, 
         "fit": fit,
         "quality": quality,
         "fit_parts": parts,
+        "unproven": held,  # the AI's own number for parts held back because it cited nothing
         "quality_parts": q_parts,
         "goal": goal,
         "brand_safety": safety,
@@ -686,7 +689,8 @@ def rescore_company(company: dict) -> None:
         evidence = [e for e in m.get("evidence") or [] if e.get("src") == "ai"] + facts
         r = {"content_fit": p["content"], "audience_fit": p["audience"], "market_fit": p["market"], "brand_fit": p["brand"],
              "readiness": p["readiness"], "brand_safety": m.get("brand_safety"), "competitor_sponsor": m.get("competitor_sponsor"),
-             "evidence": evidence, "ai_checked": m.get("checked") if m.get("checked") == "deep" else m.get("ai_checked"),
+             "evidence": evidence, "unproven": m.get("unproven") or {},
+             "ai_checked": m.get("checked") if m.get("checked") == "deep" else m.get("ai_checked"),
              **{k: m.get(k) for k in ("language", "country", "summary", "niche", "games", "tags", "matched_tags",
                                       "verdict", "collab_idea", "audience_note")}}
         store.matches[company["id"]][cid] = rebuild(m, c, company, r)
