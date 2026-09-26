@@ -9,6 +9,7 @@ import re
 URL_KEYS = {
     "youtube": re.compile(r"youtube\.com/(?:@([\w.\-]+)|channel/(UC[\w\-]{22})|c/([\w.\-]+))", re.I),
     "tiktok": re.compile(r"tiktok\.com/@([\w.\-]+)", re.I),
+    "twitch": re.compile(r"twitch\.tv/(?!videos/|directory/)(\w{3,25})", re.I),
     "instagram": re.compile(r"instagram\.com/(?!p/|reel/|explore/|stories/)([\w.]+)", re.I),
 }
 
@@ -73,7 +74,7 @@ def profiles(ids: list[str], creators: dict[str, dict], prefer: set[str] | None 
     return best
 
 
-def missing_links(c: dict, known: set[str], networks=("youtube", "tiktok")) -> list[tuple[str, str]]:
+def missing_links(c: dict, known: set[str], networks=("youtube", "tiktok", "twitch")) -> list[tuple[str, str]]:
     """(network, key) for profiles this creator links to whose key isn't in `known` (the library's keys)."""
     out = []
     for network in networks:

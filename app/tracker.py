@@ -11,7 +11,7 @@ import re
 
 from . import partners
 from .markets import MARKETS
-from .sources import tiktok, websearch, youtube
+from .sources import tiktok, twitch, websearch, youtube
 
 log = logging.getLogger("scout")
 
@@ -44,6 +44,8 @@ def platforms_to_try(p: dict) -> list[str]:
         out.append("youtube")
     if "tiktok" in said or p.get("tt_followers") or not said:
         out.append("tiktok")
+    if "twitch" in said:
+        out.append("twitch")
     return out
 
 
@@ -97,6 +99,15 @@ async def _tiktok(http, p: dict, guesses: list[str]) -> tuple[dict | None, bool,
     return None, False, ""
 
 
+async def _twitch(http, p: dict, guesses: list[str]) -> tuple[dict | None, bool, str]:
+    found = {c["handle"]: c for c in await twitch.lookup_logins(http, guesses, f"{LABEL}: {p['name']}")}
+    for g in guesses:  # the tracker has no Twitch numbers: only distinctive names in the right market count
+        c = found.get(g)
+        if c and plausible(p, "twitch", g, c.get("followers"))[0] and not _outside(c, p.get("market", "")):
+            return c, False, g
+    return None, False, ""
+
+
 def _web_guesses(p: dict, handles: list[str], tried: list[str]) -> list[str]:
     """Handles from a web search for the name, kept only when they contain the name's longest word."""
     words = sorted((partners.norm(w) for w in re.findall(r"\w{4,}", p["name"])), key=len, reverse=True)
@@ -108,12 +119,11 @@ async def resolve(http, p: dict, status: dict) -> dict:
     """One tracker entry -> {"status": found | not_found | twitch | no_source, "profiles": [...], "sure", "how"}."""
     wanted = [pl for pl in platforms_to_try(p) if status.get(pl)]
     said = " ".join(p.get("platforms", [])).lower()
-    if not platforms_to_try(p) or (not wanted and "twitch" in said):
+    if not wanted:  # e.g. a Twitch streamer while Twitch isn't set up
         return {"status": "twitch" if "twitch" in said else "no_source", "profiles": [], "sure": False, "how": ""}
-    if not wanted:
-        return {"status": "no_source", "profiles": [], "sure": False, "how": ""}
     guesses = handle_guesses(p)
-    lookups = {"youtube": _youtube, "tiktok": _tiktok}
+    lookups = {"youtube": _youtube, "tiktok": _tiktok, "twitch": _twitch}
+    names = {"youtube": "YouTube", "tiktok": "TikTok", "twitch": "Twitch"}
     profiles, sure, how = [], [], []
     for platform in wanted:
         try:
@@ -123,9 +133,9 @@ async def resolve(http, p: dict, status: dict) -> dict:
                 hits = await websearch.search(http, platform, f'"{p["name"]}"', market)
                 found, is_sure, handle = await lookups[platform](http, p, _web_guesses(p, hits, guesses))
                 if found:
-                    how.append(f"{'YouTube' if platform == 'youtube' else 'TikTok'} via web search")
+                    how.append(f"{names[platform]} via web search")
             elif handle:
-                how.append(f"{'YouTube' if platform == 'youtube' else 'TikTok'} @{handle}")
+                how.append(f"{names[platform]} @{handle}")
         except Exception as e:  # one platform failing shouldn't lose the other
             log.info("tracker lookup %s on %s failed: %s", p["name"], platform, e)
             continue

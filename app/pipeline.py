@@ -8,7 +8,7 @@ import httpx
 from . import audience, config, linking, llm, lookalike, metrics, rules, scoring, settings, tracker
 from .images import cache_creator_images
 from .markets import MARKETS
-from .sources import tiktok, youtube
+from .sources import tiktok, twitch, youtube
 from .store import now_iso, store
 
 log = logging.getLogger("scout")
@@ -208,6 +208,8 @@ async def run_job(job_id: str) -> None:
             _step(job, "plan", "Planning local-language searches")
             plans, how = await _plan(company, {**job, "markets": markets}, platforms, ai)
             n_queries = sum(len(p["youtube_queries"]) + len(p["tiktok_queries"]) + len(p["tiktok_hashtags"]) for p in plans)
+            if "twitch" in platforms:  # live streams in the language, plus a game and a channel search per creator type
+                n_queries += len(plans) * (1 + 2 * len((job.get("tags") or company.get("suggested_tags", []))[:6]))
             _step(job, "plan", "Planning local-language searches", "done",
                   f"{n_queries} searches across {len(plans)} markets ({how})")
             job["plan"] = plans
@@ -230,6 +232,11 @@ async def run_job(job_id: str) -> None:
                         # Local YouTubers often link their TikTok: a reliable way to find local TikTokers.
                         tasks.append(_run_source(job, f"yts_{m}", f"YouTube channels that link a TikTok · {MARKETS[m]['name']}",
                                                  _youtube_seeds(http, plan["tiktok_queries"][:2], m, lang)))
+                if "twitch" in platforms:
+                    # Twitch filters by broadcast language: live streams and channels for each creator type.
+                    terms = job.get("tags") or company.get("suggested_tags", [])[:6]
+                    tasks.append(_run_source(job, f"tw_{m}", f"Twitch · {MARKETS[m]['name']}",
+                                             twitch.discover(http, terms, m, lang, *size_of("twitch"))))
                 if job.get("ai_scout") and settings.scout_config():
                     tasks.append(_run_source(job, f"ai_{m}", f"AI web scout · {MARKETS[m]['name']}",
                                              _scout(http, job, company, m, platforms)))
@@ -408,7 +415,7 @@ async def fetch_linked(creators: list[dict], limit: int = LINK_LOOKUPS) -> int:
     on both platforms end up in one row (the way Prenew tracks collaborations). Returns profiles added."""
     status = settings.source_status()
     have = _library_keys()
-    want: dict[str, list[str]] = {"youtube": [], "tiktok": []}
+    want: dict[str, list[str]] = {"youtube": [], "tiktok": [], "twitch": []}
     for c in creators:
         for network, key in linking.missing_links(c, have):
             if status.get(network) and key not in have and sum(map(len, want.values())) < limit:
@@ -419,10 +426,11 @@ async def fetch_linked(creators: list[dict], limit: int = LINK_LOOKUPS) -> int:
     label = LINKED_LABEL
     found = []
     async with httpx.AsyncClient() as http:
-        for network, source in (("youtube", youtube), ("tiktok", tiktok)):
+        for network, lookup in (("youtube", youtube.lookup_handles), ("tiktok", tiktok.lookup_handles),
+                                ("twitch", twitch.lookup_logins)):
             if want[network]:
                 try:
-                    found += await source.lookup_handles(http, want[network], label)
+                    found += await lookup(http, want[network], label)
                 except Exception as e:  # extra detail only; never fail a search over it
                     log.warning("linked %s lookup failed: %s", network, e)
     added = 0

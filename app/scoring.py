@@ -114,11 +114,13 @@ def confidence(c: dict, checked: str) -> dict:
     with_likes = sum(1 for p in c.get("recent_posts", []) if isinstance(p.get("likes"), (int, float)))
     if with_likes >= 5:
         points += 1
+    elif c["platform"] == "twitch":
+        notes.append("Twitch shows no likes or comments, and no live viewer history")
     else:
         notes.append(f"Likes known for only {with_likes} posts" + (" (TikTok shows them per video)" if c["platform"] == "tiktok" else ""))
     if ((c.get("audience") or {}).get("sampled") or 0) >= 20:
         points += 1
-    else:
+    elif c["platform"] != "twitch":
         notes.append("Comments not sampled" + (" (not available for TikTok)" if c["platform"] == "tiktok" else ""))
     if c.get("country"):
         points += 1

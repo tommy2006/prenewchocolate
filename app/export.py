@@ -17,16 +17,17 @@ TRACKER_COLUMNS = [
     ("YT views / video", 12), ("TikTok followers", 12), ("TikTok views / video", 12),
 ]
 EXTRA_COLUMNS = [
-    ("Instagram followers", 12), ("Email", 30), ("YouTube", 34), ("TikTok", 34), ("Instagram", 34),
+    ("Instagram followers", 12), ("Twitch followers", 12), ("Email", 30), ("YouTube", 34), ("TikTok", 34), ("Instagram", 34),
+    ("Twitch", 30),
     ("Other links", 40), ("Match score", 9), ("Fit", 7), ("Audience quality", 9), ("Confidence", 11),
     ("Authenticity", 10), ("Est. price per post (EUR)", 14), ("Views counted over", 20), ("Views trend", 10),
     ("Engagement vs typical", 12), ("Last post (days ago)", 10), ("Risks / red flags", 44),
     ("Why they fit", 60), ("Verdict", 60), ("Summary", 60), ("Status", 11), ("Past collaborations", 22),
 ]
 COLUMNS = TRACKER_COLUMNS + EXTRA_COLUMNS
-NUMBER_COLS = {"YT subscribers", "TikTok followers", "Instagram followers"}
+NUMBER_COLS = {"YT subscribers", "TikTok followers", "Instagram followers", "Twitch followers"}
 VIEWS_COLS = {"YT views / video", "TikTok views / video"}
-URL_COLS = {"YouTube", "TikTok", "Instagram"}
+URL_COLS = {"YouTube", "TikTok", "Instagram", "Twitch"}
 # Shows 40213 as "40K avg" like Prenew's sheet, while the cell stays a number you can sort and sum.
 VIEWS_FORMAT = '[>=1000000]0.0,,"M avg";[>=1000]0,"K avg";0" avg"'
 
@@ -84,7 +85,7 @@ def _platform_label(c: dict) -> str:
 
 
 def _row(primary: dict, m: dict, profs: dict[str, dict], partner: dict | None, extra_matches: list[dict]) -> dict:
-    yt, tt, ig = profs.get("youtube"), profs.get("tiktok"), profs.get("instagram")
+    yt, tt, ig, tw = profs.get("youtube"), profs.get("tiktok"), profs.get("instagram"), profs.get("twitch")
     ordered = [primary] + [p for p in profs.values() if p is not primary]
     country = m.get("country") or primary.get("country") or next((p.get("country") for p in ordered if p.get("country")), "")
     if not country and len(m.get("search_markets") or []) == 1:
@@ -99,7 +100,7 @@ def _row(primary: dict, m: dict, profs: dict[str, dict], partner: dict | None, e
             socials.setdefault(net, url)
     emails = list(dict.fromkeys(e for p in ordered for e in p.get("emails", [])))
     links = [l for p in ordered for l in p.get("links", [])]
-    others = [f"{k}: {v}" for k, v in socials.items() if k not in profs and k not in ("youtube", "tiktok", "instagram")]
+    others = [f"{k}: {v}" for k, v in socials.items() if k not in profs and k not in ("youtube", "tiktok", "instagram", "twitch")]
     others += [l for l in dict.fromkeys(links) if l not in socials.values() and not any(l == p.get("url") for p in ordered)]
     flags = list(dict.fromkeys(f for mm in [m, *extra_matches] for f in mm.get("red_flags", [])))
     if any(mm.get("competitor_sponsor") for mm in [m, *extra_matches]):
@@ -120,18 +121,20 @@ def _row(primary: dict, m: dict, profs: dict[str, dict], partner: dict | None, e
         "Creator / channel": " / ".join(names),
         "Agency": "Yes" if agency else "",
         "Year-week": weeks[-1] if weeks else "",
-        "Platform": " + ".join(_platform_label(p) for p in ordered if p["platform"] in ("youtube", "tiktok"))
-                    + (" + Instagram" if ig and (yt or tt) else "Instagram" if ig else ""),
+        "Platform": " + ".join(_platform_label(p) for p in ordered if p["platform"] in ("youtube", "tiktok", "twitch"))
+                    + (" + Instagram" if ig and (yt or tt or tw) else "Instagram" if ig else ""),
         "Niche / content": _niche(m),
         "YT subscribers": (yt or {}).get("followers"),
         "YT views / video": (yt or {}).get("avg_views"),
         "TikTok followers": (tt or {}).get("followers"),
         "TikTok views / video": (tt or {}).get("avg_views"),
         "Instagram followers": (ig or {}).get("followers"),
+        "Twitch followers": (tw or {}).get("followers"),
         "Email": "; ".join(emails),
         "YouTube": url(yt, "youtube"),
         "TikTok": url(tt, "tiktok"),
         "Instagram": url(ig, "instagram"),
+        "Twitch": url(tw, "twitch"),
         "Other links": "; ".join(others[:6]),
         "Match score": max([m["score"]] + [mm["score"] for mm in extra_matches]),
         "Fit": m.get("fit"),
@@ -236,12 +239,12 @@ FILL_COLUMNS = ("Market", "Country", "Creator / channel", "Platform", "Niche / c
                 "YT subscribers", "YT views / video", "TikTok followers", "TikTok views / video")
 NOW_COLUMNS = [("YT subscribers now", "YT subscribers"), ("YT views / video now", "YT views / video"),
                ("TikTok followers now", "TikTok followers"), ("TikTok views / video now", "TikTok views / video")]
-TRACKER_EXTRA = [("YouTube", 34), ("TikTok", 34), ("Email", 30), ("YT subscribers now", 12), ("YT views / video now", 12),
+TRACKER_EXTRA = [("YouTube", 34), ("TikTok", 34), ("Twitch", 30), ("Email", 30), ("YT subscribers now", 12), ("YT views / video now", 12),
                  ("TikTok followers now", 12), ("TikTok views / video now", 12), ("Fit", 7), ("Audience quality", 9),
                  ("Filled by Scout", 30), ("Scout lookup", 34)]
 LOOKUP_TEXT = {
     "found": "Found", "not_found": "Not found on YouTube or TikTok",
-    "twitch": "Only on Twitch: not searched", "no_source": "Not looked up (platform not set up)",
+    "twitch": "Only on Twitch: add Twitch keys in Settings to look them up", "no_source": "Not looked up (platform not set up)",
 }
 TRACKER_ABOUT = [
     ("Your columns", "Your tracker as you uploaded it, row for row. Cells you left empty are filled in where Scout "
@@ -337,7 +340,7 @@ def tracker_xlsx(company: dict, creators: dict[str, dict], matches: dict[str, di
                 if i is not None and row[i] in (None, "") and got.get(column) not in (None, ""):
                     row[i] = got[column]
                     filled.append(column)
-        extra = [(got or {}).get("YouTube"), (got or {}).get("TikTok"), (got or {}).get("Email")] \
+        extra = [(got or {}).get("YouTube"), (got or {}).get("TikTok"), (got or {}).get("Twitch"), (got or {}).get("Email")] \
             + [(got or {}).get(src) for _, src in NOW_COLUMNS] \
             + [(got or {}).get("Fit"), (got or {}).get("Audience quality"), ", ".join(filled),
                _lookup_note(company, p["name"], bool(got)) if p else ""]

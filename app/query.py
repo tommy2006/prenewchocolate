@@ -38,7 +38,8 @@ REGIONS = {"nordic": ["FI", "SE", "NO", "DK"], "nordics": ["FI", "SE", "NO", "DK
            "scandinavian": ["SE", "NO", "DK"], "baltic": ["EE", "LV", "LT"], "baltics": ["EE", "LV", "LT"],
            "dach": ["DE", "AT", "CH"], "benelux": ["NL", "BE"]}
 PLATFORM_WORDS = {"youtube": "youtube", "youtuber": "youtube", "youtubers": "youtube", "yt": "youtube",
-                  "tiktok": "tiktok", "tiktoker": "tiktok", "tiktokers": "tiktok", "tik tok": "tiktok"}
+                  "tiktok": "tiktok", "tiktoker": "tiktok", "tiktokers": "tiktok", "tik tok": "tiktok",
+                  "twitch": "twitch", "streamer": "twitch", "streamers": "twitch"}
 TIER_WORDS = {"nano": (1000, 10_000), "micro": (10_000, 50_000), "mid-size": (50_000, 250_000), "midsize": (50_000, 250_000),
               "mid-sized": (50_000, 250_000), "mid": (50_000, 250_000), "macro": (250_000, None), "small": (1000, 50_000),
               "tiny": (500, 10_000), "big": (250_000, None), "large": (250_000, None)}

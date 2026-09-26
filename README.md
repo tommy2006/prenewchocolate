@@ -14,6 +14,11 @@ Scout automates influencer discovery for brands like Prenew, with a focus on mic
    local-language queries, reads each account's public profile, latest videos and a few video pages
    (views, likes, comments, and the country and language TikTok detected), then follows the @mentions
    in those videos to other local creators.
+   **Twitch** (optional, official API, free Client ID and Secret in *Settings*) is searched by broadcast language:
+   streams live right now in the market's language (overall and per game) and channels matching each creator type.
+   Twitch shows no likes, comments or past live viewers, so Twitch creators get no price estimate and "views per
+   video" are views of their recent past broadcasts. Instagram and Facebook have no search a tool like this may use,
+   so they appear only as profiles a creator links to (contacts and the export).
    An optional **AI web scout** lets Claude search forums, local creator lists and press for creators that
    hashtags miss. It's off by default: it runs paid web searches (about $1–3 per market).
 3. **Filter.** Keeps only creators inside the follower range who posted in the last 4 months.

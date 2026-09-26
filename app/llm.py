@@ -806,7 +806,7 @@ async def deep_evaluate(company: dict, search: dict, c: dict) -> dict:
 PARSE_SYSTEM = """You turn a marketer's description of the creators they want into search filters. Use only what the text says; leave everything else empty or 0.
 - tags: creator types or content niches mentioned (1-3 words each, Title Case), e.g. "Minecraft", "PC building", "Budget gaming".
 - markets: ISO country codes from the allowed list, for countries, nationalities or languages mentioned.
-- platforms: "youtube" and/or "tiktok" if mentioned.
+- platforms: "youtube", "tiktok" and/or "twitch" if mentioned.
 - follower_min, follower_max: follower range if mentioned (0 = not said).
 - language: ISO 639-1 code if a posting language is asked for, else "".
 - has_email: true if they want contact details. growing: true if they want creators growing fast. gems: true for small but very engaged creators.

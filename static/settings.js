@@ -3,6 +3,7 @@
 // Settings dialog: which AI to use, API keys, the local model. Uses the helpers in app.js.
 const DATA_KEY_LINKS = {
   youtube: "https://console.cloud.google.com/apis/library/youtube.googleapis.com",
+  twitch: "https://dev.twitch.tv/console/apps",
 };
 
 async function openSettings() {
@@ -37,6 +38,16 @@ async function openSettings() {
           <h3>Data sources</h3>
           ${dataKeyField("youtube", "YouTube API key", st.youtube_key_hint, "Free: Google Cloud console → enable YouTube Data API v3 → Credentials → Create API key.")}
           <p class="note">TikTok needs no key: Scout reads TikTok's public pages itself.</p>
+          <div class="field"><span>Twitch <em class="opt">optional</em></span>
+            <div class="key-row">
+              <input type="text" id="twitch-id" autocomplete="off" placeholder="${st.twitch_id_hint ? `Client ID saved (${esc(st.twitch_id_hint)})` : "Client ID"}">
+              <input type="password" id="twitch-secret" autocomplete="new-password" placeholder="${st.twitch_secret_hint ? `Secret saved (${esc(st.twitch_secret_hint)})` : "Client Secret"}">
+              <a class="btn small" href="${DATA_KEY_LINKS.twitch}" target="_blank" rel="noopener">${ICONS.ext} Get them</a>
+              <button type="button" class="btn small" data-act="test-twitch">Test</button>
+            </div>
+            <span class="test-msg" id="twitch-msg"></span>
+            <small>Free: dev.twitch.tv → Your Console → Register Your Application (any name, OAuth redirect http://localhost, category Other) → copy the Client ID and create a Client Secret. Adds Twitch to searches, with its language filter for small markets.</small>
+          </div>
         </section>
       </div>
       <div class="dlg-foot">
@@ -312,12 +323,13 @@ async function openSettings() {
       if (b) b.disabled = false;
     } else if (act === "test-ai") {
       await runTest();
-    } else if (act === "test-youtube") {
+    } else if (act === "test-youtube" || act === "test-twitch") {
       const which = act.slice(5);
       btn.disabled = true;
       const msg = $(`#${which}-msg`);
       msg.className = "test-msg"; msg.textContent = "Testing…";
-      const body = { target: which, youtube_api_key: $("#youtube-key").value.trim() || null };
+      const body = { target: which, youtube_api_key: $("#youtube-key").value.trim() || null,
+        twitch_client_id: $("#twitch-id").value.trim() || null, twitch_client_secret: $("#twitch-secret").value.trim() || null };
       try { showResult(msg, await api("/api/settings/test", { method: "POST", body })); }
       catch (err) { showResult(msg, { ok: false, message: err.message }); }
       finally { btn.disabled = false; }
@@ -335,6 +347,8 @@ async function openSettings() {
         workspace_id: d.workspace_id ?? null,
       }])),
       youtube_api_key: $("#youtube-key").value.trim() || null,
+      twitch_client_id: $("#twitch-id").value.trim() || null,
+      twitch_client_secret: $("#twitch-secret").value.trim() || null,
     };
     try {
       await api("/api/settings", { method: "PUT", body });

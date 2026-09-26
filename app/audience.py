@@ -234,7 +234,7 @@ def _nice(n: float) -> int:
 
 def price_estimate(c: dict) -> dict | None:
     views = c.get("median_views") or c.get("avg_views")
-    if not views:
+    if not views or c["platform"] == "twitch":  # Twitch deals are priced on live viewers, which we don't have
         return None
     lo, hi = CPM.get(c["platform"], CPM["tiktok"])
     low, high = max(FLOOR, views / 1000 * lo), max(FLOOR * 2, views / 1000 * hi)

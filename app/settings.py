@@ -67,6 +67,8 @@ PROVIDERS = {
 
 DATA_KEYS = {
     "youtube_api_key": {"env": "YOUTUBE_API_KEY"},
+    "twitch_client_id": {"env": "TWITCH_CLIENT_ID"},
+    "twitch_client_secret": {"env": "TWITCH_CLIENT_SECRET"},
 }
 
 
@@ -169,6 +171,10 @@ def youtube_key() -> str:
     return data_key("youtube_api_key")
 
 
+def twitch_keys() -> tuple[str, str]:
+    return data_key("twitch_client_id"), data_key("twitch_client_secret")
+
+
 def source_status() -> dict:
     ai = ai_config()
     return {
@@ -176,6 +182,7 @@ def source_status() -> dict:
         "scout": scout_config() is not None,
         "youtube": bool(youtube_key()),
         "tiktok": True,  # Scout's own scraper: no key needed
+        "twitch": all(twitch_keys()),  # optional: a free Client ID and Secret
     }
 
 
@@ -212,6 +219,8 @@ def public() -> dict:
         "writer_provider": writer_provider(data),
         "providers": providers,
         "youtube_key_hint": _mask(data_key("youtube_api_key", data)),
+        "twitch_id_hint": _mask(data_key("twitch_client_id", data)),
+        "twitch_secret_hint": _mask(data_key("twitch_client_secret", data)),
     }
 
 

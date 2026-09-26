@@ -22,6 +22,7 @@ _engines = asyncio.Semaphore(3)  # stay polite: a few requests at a time across 
 PROFILE_RE = {
     "tiktok": re.compile(r"tiktok\.com/@([\w.\-]{2,30})"),
     "youtube": re.compile(r"youtube\.com/@([\w.\-]{3,30})"),
+    "twitch": re.compile(r"twitch\.tv/(?!videos/|directory/|search)(\w{3,25})"),
 }
 BING_LINK = re.compile(r"[?&](?:amp;)?u=a1([A-Za-z0-9_\-]+)")  # Bing wraps result links as base64
 NOT_HANDLES = {"tiktok", "tiktokcreators", "tiktok_uk", "tiktok_us", "discover"}

@@ -32,9 +32,9 @@ LANGUAGES = {
     "pt": "Portuguese", "pl": "Polish", "cs": "Czech", "en": "English",
 }
 
-PLATFORMS = {"youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram"}
+PLATFORMS = {"youtube": "YouTube", "tiktok": "TikTok", "twitch": "Twitch", "instagram": "Instagram"}
 # What a search can cover. Instagram only shows up as a linked profile (contact details, export).
-SEARCH_PLATFORMS = {"youtube": "YouTube", "tiktok": "TikTok"}
+SEARCH_PLATFORMS = {"youtube": "YouTube", "tiktok": "TikTok", "twitch": "Twitch"}  # Twitch: optional, needs keys
 
 # (key, min followers, max followers, label)
 TIERS = [

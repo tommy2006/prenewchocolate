@@ -420,6 +420,7 @@ th.num { text-align: right; }
 }
 .cover .plat .ico, .d-cover .plat .ico { width: 16px; height: 16px; }
 .plat-tiktok { color: var(--text); }
+.plat-twitch { color: #9146ff; }
 .cover .plat-tiktok, .d-cover .plat-tiktok { color: #111; }  /* on the white chips over pictures */
 .pills { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
 .pill-score {

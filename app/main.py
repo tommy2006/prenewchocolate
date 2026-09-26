@@ -15,7 +15,7 @@ from . import audience, config, export as exporter, linking, llm, localai, partn
 from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
 from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint, in_range
-from .sources import youtube
+from .sources import twitch, youtube
 from .pipeline import (LINKED_LABEL, check_limit, fetch_linked, merge_ai, rebuild, rescore_company, retry_scoring,
                        run_job, run_tracker, search_of, upgrade_library)
 from .store import DEFAULT_PROFILE, DEFAULT_SEARCH, GOALS, new_id, now_iso, store
@@ -1009,6 +1009,10 @@ class SettingsIn(BaseModel):
     providers: dict[str, ProviderIn] = {}
     youtube_api_key: str | None = None
     clear_youtube_api_key: bool = False
+    twitch_client_id: str | None = None
+    clear_twitch_client_id: bool = False
+    twitch_client_secret: str | None = None
+    clear_twitch_client_secret: bool = False
 
 
 @app.get("/api/settings")
@@ -1028,13 +1032,15 @@ async def put_settings(body: SettingsIn):
 
 
 class TestIn(BaseModel):
-    target: str  # "ai" | "youtube"
+    target: str  # "ai" | "youtube" | "twitch"
     provider: str | None = None
     api_key: str | None = None
     model: str | None = None
     base_url: str | None = None
     workspace_id: str | None = None
     youtube_api_key: str | None = None
+    twitch_client_id: str | None = None
+    twitch_client_secret: str | None = None
 
 
 def _ai_overrides(body: "TestIn") -> dict:
@@ -1054,7 +1060,13 @@ async def test_settings(body: TestIn):
             return {"ok": True, "message": await llm.test_ai(ai)}
         if body.target == "youtube":
             return {"ok": True, "message": await check_youtube(body.youtube_api_key or settings.youtube_key())}
-    except (llm.LLMError, CheckError) as e:
+        if body.target == "twitch":
+            saved_id, saved_secret = settings.twitch_keys()
+            client_id, secret = body.twitch_client_id or saved_id, body.twitch_client_secret or saved_secret
+            if not client_id or not secret:
+                return {"ok": False, "message": "Add both the Client ID and the Client Secret"}
+            return {"ok": True, "message": await twitch.check(client_id, secret)}
+    except (llm.LLMError, CheckError, twitch.TwitchError) as e:
         return {"ok": False, "message": str(e)}
     raise HTTPException(400, "Unknown test")
 

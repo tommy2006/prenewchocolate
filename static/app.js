@@ -57,6 +57,7 @@ const ICONS = {
   down: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>',
   chev: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>',
   chart: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20h16M7 16v-4M12 16V8M17 16v-7"/></svg>',
+  twitch: '<svg class="ico" viewBox="0 0 24 24" fill="currentColor"><path d="M4.3 2 3 5.4v13.8h4.7V22h2.6l2.7-2.8h3.8l5.2-5.2V2H4.3zm15.4 11.1-3 3h-4.7l-2.6 2.6v-2.6h-4V3.8h14.3v9.3zM16.8 7h-1.8v5.3h1.8V7zm-4.8 0h-1.8v5.3H12V7z"/></svg>',
   people: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15.8 14.3A5 5 0 0 1 21 19.5"/></svg>',
   download: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>',
 };
@@ -1270,6 +1271,10 @@ function embedUrl(p, platform) {
     const id = url.match(/\/video\/(\d+)/)?.[1];
     return id ? `https://www.tiktok.com/embed/v2/${id}` : null;
   }
+  if (platform === "twitch") {  // Twitch's player must be told which site it's embedded on
+    const id = url.match(/\/videos\/(\d+)/)?.[1];
+    return id ? `https://player.twitch.tv/?video=${id}&parent=${location.hostname}&autoplay=true` : null;
+  }
   return null;
 }
 
@@ -1390,7 +1395,7 @@ async function startFind() {
   const wanted = S.f.platforms.length ? S.f.platforms : Object.keys(S.meta.search_platforms);
   const usable = wanted.filter((p) => src[p]);
   if (!usable.length) return toast("YouTube isn't set up yet. Add a YouTube key in Settings, or search TikTok.", "err");
-  const skipped = wanted.filter((p) => !src[p]).map((p) => S.meta.platforms[p]);
+  const skipped = wanted.filter((p) => !src[p] && (S.f.platforms.length || p === "youtube")).map((p) => S.meta.platforms[p]);
   const body = {
     ...Object.fromEntries(Object.keys(DEFAULT_SEARCH).map((k) => [k, S.f[k]])),
     platforms: usable,
