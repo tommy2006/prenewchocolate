@@ -630,9 +630,9 @@ function modernCardHtml(c, i) {
     <div class="mcard-img">${img}
       <span class="mplat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
       <button class="mstar ${starred ? "on" : ""}" data-star="${esc(c.id)}" title="${starred ? "On your shortlist" : "Add to shortlist"} (s)" aria-label="Shortlist">${starred ? ICONS.starOn : ICONS.star}</button>
+      <div class="mscores">${score("Fit", c.fit, "fit", fitWord(c.fit ?? 0).replace(" fit", ""))}${score("Quality", c.quality, "quality", qualityWord(c.quality ?? 0).replace(" audience", ""))}</div>
     </div>
     <div class="mcard-body">
-      <div class="mscores">${score("Fit", c.fit, "fit", fitWord(c.fit ?? 0).replace(" fit", ""))}${score("Quality", c.quality, "quality", qualityWord(c.quality ?? 0).replace(" audience", ""))}</div>
       ${tags ? `<div class="mpills">${tags}</div>` : ""}
       <h3>${nameLink(c)}</h3>
       <p class="mmeta">${esc(meta)}</p>
