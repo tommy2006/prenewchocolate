@@ -21,6 +21,7 @@
   --yt: #ff0033;
   --ig: #d62976;
   --radius: 10px;
+  --font-display: "Bungee", "Inter", system-ui, sans-serif;  /* fun, game-style titles; body text stays plain */
   --top: 56px;
 }
 
@@ -68,8 +69,15 @@ kbd {
 /* ---------- Top bar ---------- */
 .topbar { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); }
 .topbar-inner { max-width: 1440px; margin: 0 auto; height: var(--top); display: flex; align-items: center; gap: 24px; padding: 0 24px; }
-.brand { display: flex; align-items: center; gap: 8px; text-decoration: none; font-weight: 700; font-size: 16px; letter-spacing: -.01em; }
-.brand-mark { width: 14px; height: 14px; border-radius: 4px; background: var(--accent); }
+.brand {
+  display: flex; align-items: center; gap: 9px; text-decoration: none; font-family: var(--font-display);
+  font-size: 21px; letter-spacing: .04em; line-height: 1;
+}
+.brand-mark {
+  width: 16px; height: 16px; border-radius: 4px; background: var(--accent); transform: rotate(-12deg);
+  box-shadow: 2px 2px 0 var(--text); transition: transform .2s;
+}
+.brand:hover .brand-mark { transform: rotate(12deg) scale(1.1); }
 .tabs { display: flex; gap: 2px; }
 .tab {
   border: 0; background: none; padding: 7px 12px; border-radius: 8px; cursor: pointer;
@@ -389,7 +397,7 @@ th.num { text-align: right; }
 .card-tags:empty { display: none; }
 
 .empty { text-align: center; padding: 48px 20px; background: var(--surface); border: 1px dashed var(--line); border-radius: var(--radius); }
-.empty h2 { font-size: 18px; margin: 0 0 6px; }
+.empty h2 { font-family: var(--font-display); font-weight: 400; font-size: 20px; letter-spacing: .03em; margin: 0 0 8px; }
 .empty p { max-width: 520px; margin: 0 auto 16px; color: var(--muted); }
 
 .pager { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; margin: 20px 0 8px; }
@@ -657,7 +665,7 @@ th.num { text-align: right; }
 
 /* ---------- Shortlist ---------- */
 .shortlist-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
-.shortlist-head h1 { font-size: 20px; margin: 0; }
+.shortlist-head h1 { font-family: var(--font-display); font-weight: 400; font-size: 26px; letter-spacing: .03em; margin: 0; }
 .shortlist-head p { margin: 4px 0 0; }
 
 /* ---------- Toasts ---------- */

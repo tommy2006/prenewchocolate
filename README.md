@@ -86,11 +86,12 @@ all numbers, recent posts and the first message are in sections you open when yo
 
 ## Setup (5 minutes)
 
-1. Double-click `run.bat` (or run the command below), then open http://localhost:8000
+1. Start Scout, then open http://localhost:8001
+   - **Windows:** double-click `run.bat`.
+   - **Mac / Linux:** in Terminal, in the project folder: `./run.sh`
 
-   ```bash
-   .venv/Scripts/python -m uvicorn app.main:app --port 8000
-   ```
+   The first start installs what Scout needs (a few minutes). Stop Scout with Ctrl+C in that window.
+   Another port: `PORT=8002 ./run.sh`.
 
 2. Click the **gear (Settings)** and set up:
    - **Search AI** (runs many times per search): **Local AI** is free and runs on this computer through

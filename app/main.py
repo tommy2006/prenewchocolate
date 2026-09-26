@@ -1,4 +1,4 @@
-"""HTTP API + static UI. Run: python -m uvicorn app.main:app --port 8000"""
+"""HTTP API + static UI. Run: python -m uvicorn app.main:app --port 8001"""
 import asyncio
 import logging
 import re
