@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from . import audience, config, export as exporter, linking, llm, localai, partners, query, rules, scoring, settings
 from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
-from .metrics import agency_hint
+from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint
 from .sources import youtube
 from .pipeline import (check_limit, fetch_linked, merge_ai, rebuild, rescore_company, retry_scoring, run_job,
                        search_of, upgrade_library)
@@ -457,6 +457,9 @@ async def creator_detail(company_id: str, creator_id: str):
         "partner": {"weeks": partner["weeks"], "collabs": partner["collabs"]} if partner else None,
         "agency": agency_hint(c) or bool(partner and partner["agency"]),
         "explain": scoring.explain(c, m),
+        # What's normal for an account of this size on this platform, for the reference lines in the stats window.
+        "typical": {"rate": TYPICAL_RATE.get(c["platform"], {}).get(c.get("tier") or ""),
+                    "reach": TYPICAL_REACH.get(c["platform"], {}).get(c.get("tier") or "")},
         "quality_notes": {k: {"sign": sign, "text": text} for k, (sign, text) in scoring.quality_notes(c).items()},
     }
 

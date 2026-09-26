@@ -87,7 +87,10 @@ quick estimate the AI hasn't checked yet). **Hover any score** for a short expla
 helps, what hurts, what isn't checked yet). Click a creator to open a window with their image and a **summary**
 (verdict, Fit and Quality in plain words, key numbers, why they could work, what to watch out for, contact) and
 their **recent videos**: click one to watch it right there (YouTube and TikTok). The evidence, audience details,
-all numbers and the first message are in sections you open when you need them. Keyboard: ↑/↓ move
+all numbers and the first message are in sections you open when you need them. **Click a creator's name**
+(underlined, with a small chart icon) for their **stats window**: followers, typical views, engagement, trend, posting
+rate and price at a glance, a chart of views and of engagement per recent post against their typical level (hover a
+column for that post), audience authenticity, comment languages, sponsorship history, and every post as a table. Keyboard: ↑/↓ move
 (also inside the window), Enter open, s shortlist, x select, h not a fit, / search, Esc close.
 
 ## Setup (5 minutes)

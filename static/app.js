@@ -56,6 +56,7 @@ const ICONS = {
   up: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 15 6-6 6 6"/></svg>',
   down: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>',
   chev: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>',
+  chart: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20h16M7 16v-4M12 16V8M17 16v-7"/></svg>',
 };
 
 function toast(msg, kind = "", action = null) {
@@ -596,7 +597,7 @@ function rowHtml(c, i) {
   return `<tr data-id="${esc(c.id)}" data-i="${i}" class="${i === S.cursor ? "cur" : ""} ${S.selected.has(c.id) ? "sel" : ""} ${S.panelId === c.id ? "open" : ""}">
     <td class="c-sel"><input type="checkbox" data-select="${esc(c.id)}" ${S.selected.has(c.id) ? "checked" : ""} aria-label="Select ${esc(c.name)}"></td>
     <td class="c-who"><div class="who">${avatar(c.avatar, c.name)}
-      <div class="who-text"><div class="who-name"><span class="plat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span><b>${esc(c.name)}</b>${badges(c)}</div>
+      <div class="who-text"><div class="who-name"><span class="plat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span><b>${nameLink(c)}</b>${badges(c)}</div>
       <div class="who-sum">${esc(c.summary || c.niche || "")}</div></div></div></td>
     <td class="num">${scoreHtml(c.fit, c, "fit")}</td>
     <td class="num">${scoreHtml(c.quality, c, "quality")}</td>
@@ -614,6 +615,8 @@ function pillHtml(label, value, c, kind) {
 }
 
 const ui = () => document.documentElement.dataset.ui || "modern";
+// A creator's name: a link that opens their stats window.
+const nameLink = (c) => `<a href="#" class="cname" data-stats="${esc(c.id)}" title="See ${esc(c.name)}'s stats"><span class="cname-t">${esc(c.name)}</span><span class="cname-ico">${ICONS.chart}</span></a>`;
 
 // Modern look: a big clean image, the text and scores below it (like an article card).
 function modernCardHtml(c, i) {
@@ -631,7 +634,7 @@ function modernCardHtml(c, i) {
     <div class="mcard-body">
       <div class="mscores">${score("Fit", c.fit, "fit", fitWord(c.fit ?? 0).replace(" fit", ""))}${score("Quality", c.quality, "quality", qualityWord(c.quality ?? 0).replace(" audience", ""))}</div>
       ${tags ? `<div class="mpills">${tags}</div>` : ""}
-      <h3>${esc(c.name)}</h3>
+      <h3>${nameLink(c)}</h3>
       <p class="mmeta">${esc(meta)}</p>
       <p class="mviews">${fmtNum(c.median_views ?? c.avg_views)} typical views ${trendHtml(c.views_trend)}</p>
       <p class="msum">${esc(c.summary)}</p>
@@ -662,7 +665,7 @@ function cardHtml(c, i) {
         <span class="more">Click for details →</span>
       </div>
     </div>
-    <div class="meta"><h3>${esc(c.name)}</h3><p>${esc(place)}</p></div>
+    <div class="meta"><h3>${nameLink(c)}</h3><p>${esc(place)}</p></div>
   </article>`;
 }
 
@@ -963,6 +966,7 @@ function renderDetail(d) {
         <div class="p-actions d-actions">
           <button class="btn ${starred ? "dark" : "primary"}" data-act="panel-star">${starred ? ICONS.starOn + " On shortlist" : ICONS.star + " Add to shortlist"}</button>
           ${m.status === "hidden" ? `<button class="btn" data-act="panel-unhide">Unhide</button>` : `<button class="btn" data-act="panel-hide">Not a fit ${ICONS.chev}</button>`}
+          <button class="btn" data-stats="${esc(c.id)}">${ICONS.chart} See stats</button>
           <a class="btn" href="${esc(cr.url)}" target="_blank" rel="noopener">${ICONS.ext} Open on ${esc(platform)}</a>
           ${S.meta.sources.ai ? `<button class="btn ${m.checked === "deep" ? "" : "accent"}" data-act="deep" title="Reads their posts, descriptions and viewer comments, and judges fit like a marketer would (uses the writing AI, about a minute)">${ICONS.sparkle} ${m.checked === "deep" ? "Evaluate again" : "Deep evaluation"}</button>` : ""}
         </div>
@@ -971,7 +975,7 @@ function renderDetail(d) {
       <div class="d-main">
         <div class="d-head">
           <div class="d-title">
-            <h2>${esc(c.name)}</h2>
+            <h2>${nameLink(c)}</h2>
             <div class="d-sub"><span class="plat-inline plat-${c.platform}">${ICONS[c.platform]}</span><a href="${esc(cr.url)}" target="_blank" rel="noopener">${esc(cr.handle || platform)}</a>
               <span>${fmtNum(cr.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}</span>${country ? `<span>${esc(country)}</span>` : ""}${lang ? `<span>${esc(lang)}</span>` : ""}</div>
             <div class="d-badges">${badges(c).replace('<span class="tag new">New</span>', "")}${partner ? `<span class="tag partner">🤝 Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? '<span class="tag">Hidden</span>' : ""}</div>
@@ -1059,6 +1063,161 @@ function renderDetail(d) {
       </div>
     </div>`;
   $$("#detail details.sec").forEach((el) => el.addEventListener("toggle", () => rememberSection(el)));
+}
+
+// ---------- Creator stats (a second window, opened from the creator's name) ----------
+async function openStats(id) {
+  const dlg = $("#stats");
+  dlg.innerHTML = `<div class="loading-line" style="padding:40px"><span class="spinner"></span>Loading stats…</div>`;
+  if (!dlg.open) dlg.showModal();
+  try {
+    renderStats(await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(id)}`));
+  } catch (e) {
+    dlg.close();
+    toast(e.message, "err");
+  }
+}
+
+const fmtFull = (n) => (n == null ? "—" : Math.round(n).toLocaleString("en-US"));
+const fmtDay = (iso) => (iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "");
+
+function niceMax(v) {
+  if (!v || v <= 0) return 1;
+  const mag = 10 ** Math.floor(Math.log10(v));
+  return [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map((m) => m * mag).find((m) => m >= v);
+}
+
+// Column chart in SVG: one baseline, bars at most 24px wide with 4px rounded tops, hairline grid,
+// one labelled reference line, and each column's full height as its hover target.
+function columnChart(items, { value, cls, tip, ref, refLabel, fmt = fmtNum, height = 200, width = 660 }) {
+  const W = Math.max(280, Math.round(width)), H = height, L = 46, R = 14, T = 16, B = 28;
+  const pw = W - L - R, ph = H - T - B;
+  const max = niceMax(Math.max(...items.map(value), ref || 0) * 1.05);
+  const y = (v) => T + ph - (v / max) * ph;
+  const slot = pw / items.length;
+  const bw = Math.max(3, Math.min(24, slot - 6));
+  const bar = (x, top, w, bottom) => {
+    const r = Math.min(4, (bottom - top) / 2, w / 2);
+    return `M${x},${bottom}V${top + r}Q${x},${top} ${x + r},${top}H${x + w - r}Q${x + w},${top} ${x + w},${top + r}V${bottom}Z`;
+  };
+  const ticks = [0, max / 2, max].map((t) => `<line class="grid-line" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/>
+    <text class="axis-text" x="${L - 8}" y="${y(t) + 4}" text-anchor="end">${fmt(t)}</text>`).join("");
+  const cols = items.map((it, i) => {
+    const x = L + i * slot, v = value(it);
+    return `<g class="col" data-tip="${esc(tip(it))}"><rect class="hit" x="${x}" y="${T}" width="${slot}" height="${ph}"/>
+      <path class="bar ${cls(it)}" d="${bar(x + (slot - bw) / 2, y(v), bw, y(0))}"/></g>`;
+  }).join("");
+  const labelAt = [...new Set([0, Math.floor((items.length - 1) / 2), items.length - 1])];
+  const xs = labelAt.map((i) => `<text class="axis-text" x="${L + i * slot + slot / 2}" y="${H - 8}" text-anchor="middle">${esc(fmtDay(items[i].date))}</text>`).join("");
+  const refLine = ref ? `<line class="ref-line" x1="${L}" x2="${W - R}" y1="${y(ref)}" y2="${y(ref)}"/>
+    <text class="ref-text" x="${W - R}" y="${y(ref) - 6}" text-anchor="end">${esc(refLabel)}</text>` : "";
+  return `<svg class="chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img">${ticks}${cols}${refLine}${xs}</svg>`;
+}
+
+// Charts are drawn at the window's real width so their text stays readable on a phone, and redrawn on resize.
+function drawCharts() {
+  $$("#stats .chart-slot").forEach((slot) => {
+    const spec = S.statsCharts?.[+slot.dataset.chart];
+    if (spec) slot.innerHTML = columnChart(spec.items, { ...spec, width: slot.clientWidth });
+  });
+}
+let chartResize;
+window.addEventListener("resize", () => {
+  clearTimeout(chartResize);
+  chartResize = setTimeout(() => { if ($("#stats").open) drawCharts(); }, 120);
+});
+
+function renderStats(d) {
+  const { card: c, creator: cr, match: m, linked = [], typical = {} } = d;
+  const platform = S.meta.platforms[c.platform];
+  const posts = (cr.recent_posts || []).filter((p) => p.views != null && p.date).sort((a, b) => a.date.localeCompare(b.date)).slice(-20);
+  const withLikes = posts.filter((p) => p.views > 0 && typeof p.likes === "number");
+  const hasShorts = posts.some((p) => p.is_short);
+  const auth = cr.authenticity || {};
+  const aud = cr.audience || {};
+  const sp = cr.sponsorship || {};
+  const t = cr.views_trend;
+  const postTip = (p) => [`${fmtFull(p.views)} views${p.is_short ? " · Short" : ""}`, (p.title || "").slice(0, 90),
+    [fmtDay(p.date), p.likes != null ? `${fmtFull(p.likes)} likes` : "", p.comments != null ? `${fmtFull(p.comments)} comments` : ""].filter(Boolean).join(" · ")].join("\n");
+  const eng = (p) => ((p.likes + (p.comments || 0)) / p.views) * 100;
+  const reachMax = Math.max(cr.reach || 0, typical.reach || 0) * 1.3 || 1;
+  const langs = Object.entries(aud.languages || {});
+
+  S.statsCharts = [];
+  const chart = (items, spec) => `<div class="chart-slot" data-chart="${S.statsCharts.push({ items, ...spec }) - 1}"></div>`;
+  const kpi = (label, value, sub = "", tipText = "") => `<div class="kpi"${tipText ? ` data-tip="${esc(tipText)}"` : ""}><span>${label}</span><b${String(value).replace(/<[^>]+>/g, "").length > 7 ? ' class="long"' : ""}>${value}</b>${sub ? `<small>${sub}</small>` : ""}</div>`;
+
+  $("#stats").innerHTML = `
+    <div class="s-head">
+      ${avatar(c.avatar, c.name)}
+      <div class="s-title"><h2>${esc(c.name)} <span class="muted">· stats</span></h2>
+        <div class="d-sub"><span class="plat-inline plat-${c.platform}">${ICONS[c.platform]}</span><a href="${esc(cr.url)}" target="_blank" rel="noopener">${esc(cr.handle || platform)}</a>
+          ${c.country ? `<span>${esc(S.meta.markets[c.country]?.name || c.country)}</span>` : ""}<span>Fit ${m.fit} · Quality ${m.quality}</span></div></div>
+      <button class="icon-btn small" data-act="close-stats" title="Close (Esc)">${ICONS.x}</button>
+    </div>
+    <div class="s-body">
+      <div class="kpis">
+        ${kpi(c.platform === "youtube" ? "Subscribers" : "Followers", fmtNum(cr.followers), S.meta.tiers.find((x) => x.key === cr.tier)?.label || "")}
+        ${kpi("Typical views", fmtNum(cr.median_views ?? cr.avg_views), `median, ${esc(cr.views_window || "recent posts")}`)}
+        ${kpi("Engagement", pct(cr.engagement_rate), cr.engagement_vs_typical ? `${cr.engagement_vs_typical}× typical for their size` : "likes + comments per view")}
+        ${kpi("Views trend", t == null ? "—" : `<span class="${t >= 0.2 ? "up" : t <= -0.2 ? "down" : ""}">${t > 0 ? "↑" : t < 0 ? "↓" : ""}${Math.abs(Math.round(t * 100))}%</span>`, "last 30 days vs the 60 before")}
+        ${kpi("Posts a month", cr.posts_per_month ?? "—", `last post ${daysAgo(cr.days_since_last_post)}`)}
+        ${kpi("Est. price / post", euro(cr.price), "rough estimate", "Typical views × common rates per 1,000 views. Check with the creator.")}
+      </div>
+
+      <section class="s-card">
+        <div class="s-card-head"><h4>Views per post</h4><span class="muted">${posts.length} recent posts, oldest to newest · hover a column for details</span>
+          ${hasShorts ? `<span class="legend-keys"><span><i class="key key-1"></i>Videos</span><span><i class="key key-muted"></i>Shorts</span></span>` : ""}</div>
+        ${posts.length ? chart(posts, { value: (p) => p.views, cls: (p) => (p.is_short ? "bar-muted" : "bar-1"), tip: postTip,
+          ref: cr.median_views, refLabel: `typical ${fmtNum(cr.median_views)}` }) : `<p class="muted small">No view counts yet.</p>`}
+      </section>
+
+      <section class="s-card">
+        <div class="s-card-head"><h4>Engagement per post</h4><span class="muted">likes + comments per 100 views</span></div>
+        ${withLikes.length >= 2 ? chart(withLikes, { value: eng, cls: () => "bar-1", fmt: (v) => `${v && v < 10 ? v.toFixed(1) : Math.round(v)}%`, height: 170,
+          tip: (p) => `${eng(p).toFixed(1)}% engagement\n${(p.title || "").slice(0, 90)}\n${fmtDay(p.date)} · ${fmtFull(p.views)} views`,
+          ref: typical.rate ? typical.rate * 100 : null, refLabel: typical.rate ? `typical for their size ${(typical.rate * 100).toFixed(1)}%` : "" })
+          : `<p class="muted small">Likes are known for only ${withLikes.length} post${withLikes.length === 1 ? "" : "s"}${c.platform === "tiktok" ? " (TikTok shows them per video)" : ""}.</p>`}
+      </section>
+
+      <div class="s-grid2">
+        <section class="s-card">
+          <div class="s-card-head"><h4>Audience</h4></div>
+          <div class="s-auth">${ringHtml(auth.score, "sm")}<div><b>Authenticity ${auth.score ?? "—"}</b><small>${esc(d.quality_notes?.authenticity?.text || "")}</small></div></div>
+          ${cr.reach != null ? `<div class="meter-block">
+            <div class="meter-label"><b>${Math.round(cr.reach * 100)}%</b> of followers watch a typical post${typical.reach ? ` · typical for their size ${Math.round(typical.reach * 100)}%` : ""}</div>
+            <div class="meter"><i style="width:${Math.min(100, (cr.reach / reachMax) * 100)}%"></i>${typical.reach ? `<span class="meter-mark" style="left:${(typical.reach / reachMax) * 100}%" title="Typical for their size"></span>` : ""}</div></div>` : ""}
+          ${langs.length ? `<div class="hbars"><div class="hbars-title">Comment languages <span class="muted">(${aud.sampled} sampled)</span></div>
+            ${langs.map(([k, v]) => `<div class="hbar"><span>${esc(S.meta.languages[k] || k)}</span><div class="hbar-track"><i style="width:${Math.round(v * 100)}%"></i></div><b>${Math.round(v * 100)}%</b></div>`).join("")}</div>`
+            : `<p class="muted small">Comments not sampled${c.platform === "tiktok" ? " (not available for TikTok)" : ""}.</p>`}
+          ${d.quality_notes?.consistency?.text ? `<p class="small">${esc(d.quality_notes.consistency.text)}.</p>` : ""}
+        </section>
+        <section class="s-card">
+          <div class="s-card-head"><h4>Sponsorship and activity</h4></div>
+          <ul class="s-list">
+            <li><b>${sp.sponsored ?? 0} of ${sp.checked ?? 0}</b> recent posts marked as ads or sponsored</li>
+            <li><b>${sp.with_codes ?? 0}</b> with a discount code or affiliate link</li>
+            <li>Posts <b>${cr.posts_per_month ?? "—"}</b> times a month · last post ${daysAgo(cr.days_since_last_post)}</li>
+            ${cr.shorts_share != null ? `<li><b>${Math.round(cr.shorts_share * 100)}%</b> of recent uploads are Shorts</li>` : ""}
+            ${cr.emails?.length ? `<li>Business email: <b>${esc(cr.emails[0])}</b></li>` : "<li>No public email</li>"}
+          </ul>
+          ${(sp.posts || []).length ? `<div class="cites">${sp.posts.map((p) => `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title || "sponsored post")}</a>`).join("")}</div>` : ""}
+          ${linked.length ? `<div class="also">${linked.map((o) => `<a href="${esc(o.url)}" target="_blank" rel="noopener">${ICONS[o.platform]} ${esc(S.meta.platforms[o.platform])}: ${fmtNum(o.followers)}${o.avg_views != null ? ` · ${fmtNum(o.avg_views)} views` : ""}</a>`).join("")}</div>` : ""}
+        </section>
+      </div>
+
+      <details class="sec s-table">
+        <summary><span class="sec-title">All posts as a table</span><span class="sec-hint">${posts.length} posts</span>${ICONS.chev}</summary>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Date</th><th>Post</th><th class="num">Views</th><th class="num">Likes</th><th class="num">Comments</th><th class="num">Engagement</th></tr></thead>
+          <tbody>${posts.slice().reverse().map((p) => `<tr><td>${esc(fmtDay(p.date))}</td>
+            <td class="s-post"><a href="${esc(p.url || cr.url)}" target="_blank" rel="noopener">${esc(p.title || "(no title)")}</a>${p.is_short ? ' <span class="tag">Short</span>' : ""}</td>
+            <td class="num">${fmtFull(p.views)}</td><td class="num">${p.likes != null ? fmtFull(p.likes) : "—"}</td>
+            <td class="num">${p.comments != null ? fmtFull(p.comments) : "—"}</td><td class="num">${typeof p.likes === "number" && p.views ? eng(p).toFixed(1) + "%" : "—"}</td></tr>`).join("")}</tbody>
+        </table></div>
+      </details>
+    </div>`;
+  drawCharts();
 }
 
 // Watch a recent video inside the window (YouTube and TikTok embeds); anything else opens on the platform.
@@ -1489,7 +1648,7 @@ async function renderShortlist() {
     <tbody>${data.items.map((c) => `
       <tr data-id="${esc(c.id)}">
         <td class="c-who"><div class="who">${avatar(c.avatar, c.name)}
-          <div class="who-text"><div class="who-name"><span class="plat plat-${c.platform}">${ICONS[c.platform]}</span><b>${esc(c.name)}</b>${badges(c)}</div>
+          <div class="who-text"><div class="who-name"><span class="plat plat-${c.platform}">${ICONS[c.platform]}</span><b>${nameLink(c)}</b>${badges(c)}</div>
           <div class="who-sum">${esc(c.summary)}</div></div></div></td>
         <td class="num">${scoreHtml(c.fit, c, "fit")}</td>
         <td class="num">${scoreHtml(c.quality, c, "quality")}</td>
@@ -1575,7 +1734,7 @@ function bindEvents() {
       return;
     }
     const dialog = $("dialog[open]");
-    if (dialog && dialog.id !== "detail") return;
+    if ((dialog && dialog.id !== "detail") || $("#stats").open) return;
     if (e.key === "Escape") {
       if ($$(".pop:not([hidden]), .menu-pop").length) { e.preventDefault(); closePops(); }
       return; // otherwise the details window closes itself
@@ -1685,6 +1844,8 @@ function bindEvents() {
       searchChanged();
       return;
     }
+    const statsLink = e.target.closest("[data-stats]");
+    if (statsLink) { e.preventDefault(); openStats(statsLink.dataset.stats); return; }
     const star = e.target.closest("[data-star]");
     if (star) { toggleStar(star.dataset.star); return; }
     const vid = e.target.closest("[data-play]");
@@ -1747,6 +1908,7 @@ function bindEvents() {
     else if (act === "bulk-clear") { S.selected.clear(); renderBulk(); loadCreators({ quiet: true }); }
     else if (act === "panel-close") closeDetail();
     else if (act === "close-player") closePlayer();
+    else if (act === "close-stats") $("#stats").close();
     else if (act === "panel-prev") moveCursor(-1);
     else if (act === "panel-next") moveCursor(1);
     else if (act === "panel-star") toggleStar(S.panelId);
