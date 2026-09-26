@@ -170,6 +170,11 @@ async def run_job(job_id: str) -> None:
     company = store.companies[job["company_id"]]
     job["status"] = "running"
     fmin, fmax = job.get("follower_min"), job.get("follower_max")
+    by_platform = job.get("size_by_platform") or {}  # the company's usual size per platform, when picked
+
+    def size_of(platform: str) -> tuple:
+        return tuple(by_platform[platform]) if platform in by_platform else (fmin, fmax)
+
     platforms = [p for p in job["platforms"] if settings.source_status().get(p)]
     ai = settings.ai_config()
     job["ai"] = f"{ai['label']} · {ai['model']}" if ai["ready"] else "no AI (quick scores only)"
@@ -189,10 +194,10 @@ async def run_job(job_id: str) -> None:
                 lang = MARKETS[m]["languages"][0]
                 if "youtube" in platforms and plan["youtube_queries"]:
                     tasks.append(_run_source(job, f"yt_{m}", f"YouTube · {MARKETS[m]['name']}",
-                                             youtube.discover(http, plan["youtube_queries"], m, lang, fmin, fmax)))
+                                             youtube.discover(http, plan["youtube_queries"], m, lang, *size_of("youtube"))))
                 if "tiktok" in platforms and (plan["tiktok_queries"] or plan["tiktok_hashtags"]):
                     tasks.append(_run_source(job, f"tt_{m}", f"TikTok · {MARKETS[m]['name']}",
-                                             tiktok.discover(http, plan["tiktok_queries"], plan["tiktok_hashtags"], m, fmin, fmax)))
+                                             tiktok.discover(http, plan["tiktok_queries"], plan["tiktok_hashtags"], m, *size_of("tiktok"))))
                     if "youtube" not in platforms and settings.source_status()["youtube"]:
                         # Local YouTubers often link their TikTok: a reliable way to find local TikTokers.
                         tasks.append(_run_source(job, f"yts_{m}", f"YouTube channels that link a TikTok · {MARKETS[m]['name']}",
@@ -225,7 +230,7 @@ async def run_job(job_id: str) -> None:
             already = store.matches.get(company["id"], {})
             pool, outside = [], 0
             for c in candidates.values():
-                if not metrics.in_range(c.get("followers"), fmin, fmax):
+                if not metrics.in_range(c.get("followers"), *size_of(c["platform"])):
                     continue
                 if c.get("days_since_last_post") is None or c["days_since_last_post"] > ACTIVE_DAYS:
                     continue

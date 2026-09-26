@@ -64,8 +64,10 @@ profiles like Instagram/Twitch/Discord) · risks and brand safety · **views tre
 engagement vs. typical for their size · posting frequency · consistency · **authenticity signals** · comment
 languages · sponsored posts and discount codes · **estimated price per post**.
 
-Any size can be searched; with no size picked, everything from 1k followers up is included
-(Prenew's usual range: YouTube 50k–250k subscribers, TikTok 4k+).
+Any size can be searched; with no size picked, everything from 1k followers up is included.
+**The company's usual size** is set per platform in *Brand profile* (Prenew: YouTube 50k–250k subscribers,
+TikTok 4k+). Pick *Prenew's usual* under *Size* and both the list and new searches use each platform's own range.
+*More filters → Typical views per post* narrows by median views (for example 20k–100k).
 
 **Brand profile.** The AI judges fit against the company's profile: what it sells, the **target customer**,
 youngest audience age, price range, **competitors** (creators they sponsor are flagged), values and tone, never-work-with

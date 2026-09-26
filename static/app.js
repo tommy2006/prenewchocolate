@@ -105,9 +105,9 @@ function hideTip() { tipEl.hidden = true; }
 
 // ---------- State ----------
 // Search criteria (saved per company, used for both filtering and new searches)
-const DEFAULT_SEARCH = { tags: [], markets: [], platforms: [], tiers: [], follower_min: null, follower_max: null, deal_types: [], avoid: [], example_creators: [], ai_scout: false };
+const DEFAULT_SEARCH = { tags: [], markets: [], platforms: [], tiers: [], follower_min: null, follower_max: null, deal_types: [], avoid: [], example_creators: [], ai_scout: false, size_preset: "" };
 // ...plus filters that only narrow what's already in the library
-const DEFAULT_FILTERS = { ...DEFAULT_SEARCH, q: "", language: "", min_score: 0, min_eng: 0, has_email: false, gems: false, growing: false, show_hidden: false, sort: "match" };
+const DEFAULT_FILTERS = { ...DEFAULT_SEARCH, q: "", language: "", min_score: 0, min_eng: 0, views: "", has_email: false, gems: false, growing: false, show_hidden: false, sort: "match" };
 const S = {
   meta: null,
   companies: [],
@@ -265,6 +265,7 @@ function renderFilters() {
   $("#f-min-score").value = S.f.min_score;
   $("#min-score-val").textContent = S.f.min_score;
   $("#f-min-eng").value = String(S.f.min_eng);
+  $("#f-views").value = S.f.views || "";
   $("#f-has-email").checked = S.f.has_email;
   $("#f-growing").checked = S.f.growing;
   $("#f-gems").checked = S.f.gems;
@@ -327,7 +328,7 @@ function renderPlatforms() {
 }
 
 function updateAdvCount() {
-  const n = (S.f.language ? 1 : 0) + (S.f.min_score ? 1 : 0) + (S.f.min_eng ? 1 : 0)
+  const n = (S.f.language ? 1 : 0) + (S.f.min_score ? 1 : 0) + (S.f.min_eng ? 1 : 0) + (S.f.views ? 1 : 0)
     + (S.f.has_email ? 1 : 0) + (S.f.gems ? 1 : 0) + (S.f.growing ? 1 : 0) + (S.f.show_hidden ? 1 : 0);
   $("#adv-count").hidden = !n;
   $("#adv-count").textContent = n;
@@ -360,20 +361,31 @@ function sizeText(min, max) {
   return `${fmtNum(min)}–${fmtNum(max)}`;
 }
 
+// The company's usual size per platform (brand profile), e.g. "YouTube 50k–250k · TikTok 4k+".
+const usualSize = () => S.company?.profile?.usual_size || null;
+const usualText = (us) => Object.entries(us || {}).map(([p, [lo, hi]]) => `${S.meta.platforms[p] || p} ${sizeText(lo, hi)}`).join(" · ");
+
 function renderSize() {
-  const lo = sizeIndex(S.f.follower_min, false);
-  const hi = sizeIndex(S.f.follower_max, true);
+  const usual = S.f.size_preset === "usual" && usualSize();
+  const lo = usual ? 0 : sizeIndex(S.f.follower_min, false);
+  const hi = usual ? SIZE_STEPS.length - 1 : sizeIndex(S.f.follower_max, true);
   $("#size-lo").value = lo;
   $("#size-hi").value = hi;
   const last = SIZE_STEPS.length - 1;
   $("#range-fill").style.left = `${(lo / last) * 100}%`;
   $("#range-fill").style.width = `${((hi - lo) / last) * 100}%`;
-  $("#size-label").textContent = sizeText(S.f.follower_min, S.f.follower_max) + (S.f.follower_min || S.f.follower_max != null ? " followers" : "");
-  $("#size-btn").classList.toggle("on", !!(S.f.follower_min || S.f.follower_max != null));
-  $("#f-sizes").innerHTML = SIZE_PRESETS.map((p, i) => {
-    const on = (p.min || 0) === (S.f.follower_min || 0) && (p.max ?? null) === (S.f.follower_max ?? null);
-    return `<button type="button" class="chip small-chip ${on ? "on" : ""}" data-size="${i}">${esc(p.label)}</button>`;
-  }).join("");
+  $("#size-label").textContent = usual ? `${S.company.name}'s usual size`
+    : sizeText(S.f.follower_min, S.f.follower_max) + (S.f.follower_min || S.f.follower_max != null ? " followers" : "");
+  $("#size-btn").classList.toggle("on", !!(usual || S.f.follower_min || S.f.follower_max != null));
+  $(".range").classList.toggle("off", !!usual);
+  const us = usualSize();
+  $("#f-sizes").innerHTML = (us ? `<button type="button" class="chip small-chip ${usual ? "on" : ""}" data-size="usual"
+      data-tip="${esc(`${S.company.name}'s usual size\n${usualText(us)}\nFrom the brand profile. Each platform gets its own range.`)}">★ ${esc(S.company.name)}'s usual</button>` : "")
+    + SIZE_PRESETS.map((p, i) => {
+      const on = !usual && (p.min || 0) === (S.f.follower_min || 0) && (p.max ?? null) === (S.f.follower_max ?? null);
+      return `<button type="button" class="chip small-chip ${on ? "on" : ""}" data-size="${i}">${esc(p.label)}</button>`;
+    }).join("")
+    + (usual ? `<p class="size-note">${esc(usualText(us))}</p>` : "");
 }
 
 let sizeTimer;
@@ -386,14 +398,16 @@ function sizeFromSlider(which) {
   }
   S.f.follower_min = SIZE_STEPS[lo] || null;
   S.f.follower_max = SIZE_STEPS[hi];
+  S.f.size_preset = "";
   renderSize();
   clearTimeout(sizeTimer);
   sizeTimer = setTimeout(() => searchChanged(), 250);
 }
 
-function setSize(min, max) {
+function setSize(min, max, preset = "") {
   S.f.follower_min = min;
   S.f.follower_max = max;
+  S.f.size_preset = preset;
   renderSize();
   searchChanged();
 }
@@ -486,6 +500,7 @@ function applyParsed(r, text) {
   if (f.follower_min !== undefined || f.follower_max !== undefined) {
     S.f.follower_min = f.follower_min || null;
     S.f.follower_max = f.follower_max ?? null;
+    S.f.size_preset = "";
   }
   if (f.language) S.f.language = f.language;
   if (f.has_email) S.f.has_email = true;
@@ -517,7 +532,7 @@ async function showRecent() {
   const el = $("#recent");
   el.innerHTML = `<div class="recent-head">Recent searches</div>` + S.recent.map((j, i) => {
     const bits = [j.tags?.join(", "), j.markets.map((m) => S.meta.markets[m]?.name || m).join(", "),
-      j.platforms.map((p) => S.meta.platforms[p]).join(" + "), sizeText(j.follower_min, j.follower_max), j.focus && `“${j.focus}”`].filter(Boolean);
+      j.platforms.map((p) => S.meta.platforms[p]).join(" + "), j.size_preset === "usual" ? "usual size" : sizeText(j.follower_min, j.follower_max), j.focus && `“${j.focus}”`].filter(Boolean);
     return `<button type="button" data-recent="${i}"><span>${esc(bits.join(" · "))}</span><small>${ago(j.created_at)}${j.new != null ? ` · ${j.new} found` : ""}</small></button>`;
   }).join("");
   el.hidden = false;
@@ -528,8 +543,9 @@ function applyRecent(j) {
   S.f.tags = [...(j.tags || [])];
   S.f.markets = [...j.markets];
   S.f.platforms = j.platforms.length === Object.keys(S.meta.search_platforms).length ? [] : [...j.platforms];
-  S.f.follower_min = j.follower_min || null;
-  S.f.follower_max = j.follower_max ?? null;
+  S.f.size_preset = j.size_preset === "usual" && usualSize() ? "usual" : "";
+  S.f.follower_min = S.f.size_preset ? null : j.follower_min || null;
+  S.f.follower_max = S.f.size_preset ? null : j.follower_max ?? null;
   S.f.q = j.focus || "";
   $("#q").value = S.f.q;
   $("#understood").hidden = true;
@@ -544,7 +560,8 @@ function queryString(extra = {}) {
   const f = S.f;
   const p = new URLSearchParams({
     q: f.q, tags: f.tags.join(","), platforms: f.platforms.join(","), tiers: f.tiers.join(","), markets: f.markets.join(","),
-    fmin: f.follower_min || 0, fmax: f.follower_max || 0,
+    fmin: f.follower_min || 0, fmax: f.follower_max || 0, usual: f.size_preset === "usual" && !!usualSize(),
+    vmin: +(f.views || "").split("-")[0] || 0, vmax: +(f.views || "").split("-")[1] || 0,
     language: f.language, min_score: f.min_score, min_eng: f.min_eng, has_email: f.has_email, gems: f.gems, growing: f.growing,
     status: f.show_hidden ? "hidden" : "", sort: f.sort, page: S.page, page_size: 50, job: S.viewJob || "", ...extra,
   });
@@ -687,7 +704,7 @@ function cardHtml(c, i) {
 
 function renderResults(data) {
   const grid = $("#grid");
-  const filtered = S.f.q || S.f.tags.length || S.f.platforms.length || S.f.markets.length || S.f.language || S.f.follower_min || S.f.follower_max != null
+  const filtered = S.f.q || S.f.tags.length || S.f.platforms.length || S.f.markets.length || S.f.language || S.f.follower_min || S.f.follower_max != null || S.f.size_preset || S.f.views
     || S.f.min_score || S.f.min_eng || S.f.has_email || S.f.gems || S.f.growing || S.f.show_hidden;
   $("#downloads").innerHTML = downloadLinks(data.total);
   if (!data.library_size) {
@@ -1480,6 +1497,15 @@ function openCompanyForm(company) {
         <label class="field"><span>Price range <em class="opt">optional</em></span><input type="text" id="co-price" value="${esc(p.price_range || "")}" placeholder="e.g. €500–1,500"></label>
         <label class="field"><span>Budget per collaboration, € <em class="opt">optional</em></span><input type="number" id="co-budget" min="0" step="50" value="${p.budget_max ?? ""}" placeholder="e.g. 800">
           <small>Compared with each creator's estimated price.</small></label>
+        <div class="field span2"><span>Usual creator size <em class="opt">optional, followers</em></span>
+          <div class="usual-size">${Object.keys(S.meta.search_platforms).map((pl) => {
+            const [lo, hi] = (p.usual_size || {})[pl] || [];
+            return `<label><span class="plat-inline plat-${pl}">${ICONS[pl] || ""}</span><b>${esc(S.meta.platforms[pl])}</b></label>
+              <input type="number" min="0" step="1000" data-usual="${pl}:0" value="${lo ?? ""}" placeholder="from" aria-label="${esc(S.meta.platforms[pl])} from">
+              <span class="muted">to</span>
+              <input type="number" min="0" step="1000" data-usual="${pl}:1" value="${hi ?? ""}" placeholder="no limit" aria-label="${esc(S.meta.platforms[pl])} to">`;
+          }).join("")}</div>
+          <small>The sizes you usually work with. Pick "${esc(co.name || "Your")}'s usual" under Size to search and filter with them.</small></div>
         <div class="field span2"><span>Competitors <em class="opt">creators they sponsor are flagged</em></span><div class="chip-input" id="co-competitors"></div></div>
         <label class="field span2"><span>Values and tone <em class="opt">optional</em></span><input type="text" id="co-values" value="${esc(p.values || "")}" placeholder="e.g. Trustworthy, value for money, less e-waste"></label>
         <div class="field span2"><span>Never work with <em class="opt">optional</em></span><div class="chip-input" id="co-nogo"></div></div>
@@ -1534,6 +1560,12 @@ function openCompanyForm(company) {
         website: $("#co-website").value.trim(), target_customer: $("#co-target").value.trim(),
         min_audience_age: num("#co-age"), price_range: $("#co-price").value.trim(), competitors: competitors.get(),
         values: $("#co-values").value.trim(), no_go: nogo.get(), budget_max: num("#co-budget"), goal,
+        usual_size: $$("[data-usual]").reduce((acc, el) => {
+          const [pl, i] = el.dataset.usual.split(":");
+          const v = parseInt(el.value, 10);
+          (acc[pl] ||= [null, null])[+i] = v > 0 ? v : null;
+          return acc;
+        }, {}),
       },
     };
     if (!body.name) return toast("Give the company a name", "err");
@@ -1733,6 +1765,7 @@ function bindEvents() {
   $("#f-language").addEventListener("change", (e) => { S.f.language = e.target.value; filtersChanged(); });
   $("#f-min-score").addEventListener("input", (e) => { S.f.min_score = +e.target.value; $("#min-score-val").textContent = e.target.value; filtersChanged({ debounce: true }); });
   $("#f-min-eng").addEventListener("change", (e) => { S.f.min_eng = +e.target.value; filtersChanged(); });
+  $("#f-views").addEventListener("change", (e) => { S.f.views = e.target.value; updateAdvCount(); filtersChanged(); });
   $("#f-has-email").addEventListener("change", (e) => { S.f.has_email = e.target.checked; filtersChanged(); });
   $("#f-growing").addEventListener("change", (e) => { S.f.growing = e.target.checked; filtersChanged(); });
   $("#f-gems").addEventListener("change", (e) => { S.f.gems = e.target.checked; filtersChanged(); });
@@ -1843,7 +1876,11 @@ function bindEvents() {
       return;
     }
     const sizePreset = e.target.closest("[data-size]");
-    if (sizePreset) { const p = SIZE_PRESETS[+sizePreset.dataset.size]; setSize(p.min, p.max); return; }
+    if (sizePreset) {
+      if (sizePreset.dataset.size === "usual") setSize(null, null, S.f.size_preset === "usual" ? "" : "usual");
+      else { const p = SIZE_PRESETS[+sizePreset.dataset.size]; setSize(p.min, p.max); }
+      return;
+    }
     const tagAdd = e.target.closest("[data-tag-add]");
     if (tagAdd) { addTag(tagAdd.dataset.tagAdd); return; }
     const tagRemove = e.target.closest("[data-tag-remove]");

@@ -415,10 +415,20 @@ GOAL_TEXT = {
 }
 
 
+def _size_text(search: dict) -> str:
+    """"50,000 to 250,000" or, with the company's usual size per platform, "YouTube 50,000 to 250,000; TikTok 4,000+"."""
+    def one(lo, hi):
+        return f"{lo or 0:,} to {hi:,}" if hi else f"{lo or 0:,}+"
+    by_platform = search.get("size_by_platform") or {}
+    if by_platform:
+        return "; ".join(f"{PLATFORMS.get(p, p)} {one(*r)}" for p, r in by_platform.items())
+    fmax = search.get("follower_max")
+    return f"{search.get('follower_min') or 0:,} to {f'{fmax:,}' if fmax else 'any'}"
+
+
 def brand_block(company: dict, search: dict, past_limit: int = 30) -> str:
     """The company (profile), what this search asks for, what worked before and what the team rejected."""
     markets = ", ".join(f"{MARKETS[m]['name']} ({m})" for m in search.get("markets", []) if m in MARKETS)
-    fmax = search.get("follower_max")
     p = company.get("profile") or {}
     lines = ["<brand>", f"Name: {company.get('name', '')}", f"About: {company.get('description') or 'n/a'}"]
     for label, value in (("Target customer", p.get("target_customer")), ("Price range", p.get("price_range")),
@@ -440,7 +450,7 @@ def brand_block(company: dict, search: dict, past_limit: int = 30) -> str:
         f"Creator types wanted: {', '.join(search.get('tags', [])) or 'not specified; infer what would sell this brand'}",
         f"Extra focus: {search.get('focus') or 'none'}",
         f"Target markets: {markets or 'n/a'}",
-        f"Follower range: {search.get('follower_min') or 0:,} to {f'{fmax:,}' if fmax else 'any'}",
+        f"Follower range: {_size_text(search)}",
         f"Collaboration types offered: {', '.join(search.get('deal_types', [])) or 'open'}",
         f"Avoid: {', '.join(search.get('avoid', [])) or 'nothing specified'}",
     ]

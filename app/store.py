@@ -32,7 +32,7 @@ PRENEW = {
     "search": None,  # filled from DEFAULT_SEARCH below
     # Structured context the AI judges fit against (editable in "Brand profile").
     "profile": None,  # filled from PRENEW_PROFILE below
-    "seed_version": 3,
+    "seed_version": 4,
 }
 
 # Prenew's first creator types (before we had their collaboration history); replaced on upgrade.
@@ -51,6 +51,7 @@ DEFAULT_SEARCH = {
     "avoid": [],
     "example_creators": [],
     "ai_scout": False,
+    "size_preset": "",  # "usual" = the company's usual creator size per platform (brand profile)
 }
 PRENEW["search"] = {
     **DEFAULT_SEARCH,
@@ -71,6 +72,7 @@ DEFAULT_PROFILE = {
     "no_go": [],             # never work with these kinds of creators
     "budget_max": None,      # EUR per collaboration
     "goal": "balanced",      # sales | balanced | awareness: changes how fit and audience quality are weighed
+    "usual_size": None,      # {platform: [min, max]} followers the company usually works with (None = no limit)
 }
 # Prenew's starting profile, from their brief. Competitors are an editable first guess.
 PRENEW["profile"] = {
@@ -81,6 +83,8 @@ PRENEW["profile"] = {
     "competitors": ["Back Market", "refurbed", "Verkkokauppa.com", "Jimm's PC-Store", "Gigantti"],
     "values": "Trust (every PC is tested and comes with a warranty), value for money, and less e-waste than buying new.",
     "no_go": ["Gambling or skin betting", "Adult content"],
+    # From Prenew's Q&A: most collaborations are YouTube 50k-250k subscribers and TikTok 4,000+ followers.
+    "usual_size": {"youtube": [50_000, 250_000], "tiktok": [4_000, None]},
 }
 
 # Fields that used to live on the company profile before they moved into the search area.

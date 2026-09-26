@@ -665,6 +665,14 @@ th.num { text-align: right; }
 .via { font-size: 12px; color: var(--muted); margin: 0; }
 .loading-line { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13.5px; padding: 4px 0; }
 
+/* Company's usual size: note under the size chips, and the slider fades while the preset is on */
+.size-note { flex-basis: 100%; margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+.range.off { opacity: .35; }
+.usual-size { display: grid; grid-template-columns: auto 1fr auto 1fr; align-items: center; gap: 8px 10px; }
+.usual-size label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.usual-size input { border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 7px 10px; width: 100%; min-width: 0; }
+html[data-ui="modern"] .usual-size input { border-radius: 14px; }
+
 /* ---------- Creator name: a clear link to the stats window ---------- */
 .cname {
   display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; vertical-align: bottom;

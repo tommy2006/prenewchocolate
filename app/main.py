@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from . import audience, config, export as exporter, linking, llm, localai, partners, query, rules, scoring, settings
 from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
-from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint
+from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint, in_range
 from .sources import youtube
 from .pipeline import (check_limit, fetch_linked, merge_ai, rebuild, rescore_company, retry_scoring, run_job,
                        search_of, upgrade_library)
@@ -97,6 +97,7 @@ class ProfileIn(BaseModel):
     no_go: list[str] = []
     budget_max: int | None = None
     goal: str = "balanced"
+    usual_size: dict[str, list[int | None]] | None = None  # {"youtube": [50000, 250000], "tiktok": [4000, None]}
 
 
 class CompanyIn(BaseModel):
@@ -114,7 +115,30 @@ def _clean_profile(p: ProfileIn | None, old: dict | None = None) -> dict:
     data["no_go"] = [c.strip() for c in data["no_go"] if c.strip()][:30]
     for key in ("min_audience_age", "budget_max"):
         data[key] = data[key] if data[key] and data[key] > 0 else None
+    data["usual_size"] = clean_usual_size(data.get("usual_size"))
     return data
+
+
+def clean_usual_size(raw) -> dict | None:
+    """{platform: [min, max]} with positive whole numbers or None; platforms with no limits are dropped."""
+    out = {}
+    for platform, rng in (raw or {}).items():
+        if platform not in PLATFORMS or not isinstance(rng, (list, tuple)):
+            continue
+        lo, hi = (list(rng) + [None, None])[:2]
+        lo = int(lo) if isinstance(lo, (int, float)) and lo > 0 else None
+        hi = int(hi) if isinstance(hi, (int, float)) and hi > 0 else None
+        if lo and hi and hi < lo:
+            lo, hi = hi, lo
+        if lo or hi:
+            out[platform] = [lo, hi]
+    return out or None
+
+
+def usual_range(company: dict, platform: str) -> tuple[int | None, int | None] | None:
+    """The company's usual follower range on this platform, or None when it has none there."""
+    rng = ((company.get("profile") or {}).get("usual_size") or {}).get(platform)
+    return tuple(rng) if rng else None
 
 
 class SearchIn(BaseModel):
@@ -129,6 +153,7 @@ class SearchIn(BaseModel):
     avoid: list[str] = []
     example_creators: list[str] = []
     ai_scout: bool = False
+    size_preset: str = ""  # "usual": the company's usual size per platform, from the brand profile
 
 
 async def _fill_suggestions(company_id: str) -> None:
@@ -203,8 +228,8 @@ async def update_company(company_id: str, body: CompanyIn):
     if changed:
         _start_suggestions(company)
     store.save()
-    if company["profile"] != old_profile:
-        rescore_company(company)  # goal, budget or competitors change how everyone ranks
+    if {**company["profile"], "usual_size": None} != {**old_profile, "usual_size": None}:
+        rescore_company(company)  # goal, budget or competitors change how everyone ranks (usual size only filters)
     return _public(company)
 
 
@@ -345,6 +370,9 @@ class Filters(BaseModel):
     sort: str = "match"
     fmin: int = 0  # size slider: followers from..to (0 = no limit)
     fmax: int = 0
+    usual: bool = False  # the company's usual size per platform instead of the slider
+    vmin: int = 0  # typical (median) views per post from..to (0 = no limit)
+    vmax: int = 0
     job: str = ""  # show exactly what one search found, ignoring the other filters
     ids: str = ""  # exactly these creators (the bulk selection), ignoring the other filters
 
@@ -355,6 +383,7 @@ def _rows(company_id: str, f: Filters) -> list[tuple[dict, dict]]:
     tags_f = [t.strip().lower() for t in _csv(f.tags) if t.strip()]
     terms = f.q.lower().split()
     ids_f = set(_csv(f.ids))
+    company = store.companies.get(company_id) or {}
     rows = []
     for cid, m in store.matches.get(company_id, {}).items():
         c = store.creators.get(cid)
@@ -380,8 +409,16 @@ def _rows(company_id: str, f: Filters) -> list[tuple[dict, dict]]:
         if tiers_f and c.get("tier") not in tiers_f:
             continue
         followers = c.get("followers") or 0
-        if (f.fmin and followers < f.fmin) or (f.fmax and followers > f.fmax):
+        if f.usual:
+            rng = usual_range(company, c["platform"])
+            if rng and not in_range(followers, *rng):
+                continue
+        elif (f.fmin and followers < f.fmin) or (f.fmax and followers > f.fmax):
             continue
+        if f.vmin or f.vmax:
+            views = c.get("median_views") or c.get("avg_views")
+            if views is None or (f.vmin and views < f.vmin) or (f.vmax and views > f.vmax):
+                continue
         country = m.get("country") or c.get("country") or ""
         lang = m.get("language") or c.get("language") or ""
         # Unknown country: keep if they speak a market language or were found by a search for that market.
@@ -623,11 +660,11 @@ async def recent_searches(company_id: str, limit: int = 8):
     out, seen = [], set()
     for j in jobs:
         key = (tuple(sorted(j.get("tags") or [])), tuple(sorted(j["markets"])), tuple(sorted(j["platforms"])),
-               j.get("follower_min"), j.get("follower_max"), (j.get("focus") or "").lower())
+               j.get("follower_min"), j.get("follower_max"), j.get("size_preset") or "", (j.get("focus") or "").lower())
         if key in seen:
             continue
         seen.add(key)
-        out.append({k: j.get(k) for k in ("id", "tags", "markets", "platforms", "follower_min", "follower_max", "focus",
+        out.append({k: j.get(k) for k in ("id", "tags", "markets", "platforms", "follower_min", "follower_max", "size_preset", "focus",
                                            "created_at", "new", "status")})
         if len(out) >= limit:
             break
@@ -736,7 +773,14 @@ async def start_job(company_id: str, body: JobIn):
     # Size slider (or older size chips) -> follower range. Nothing picked = any size
     # (Prenew: "find influencers no matter the size").
     chosen = [t for t in TIERS if t[0] in body.tiers]
-    if body.follower_min is not None or body.follower_max is not None:
+    by_platform = {p: usual_range(company, p) for p in platforms} if body.size_preset == "usual" else {}
+    by_platform = {p: list(r) for p, r in by_platform.items() if r}
+    if by_platform:
+        # The company's usual size per platform; a platform without one is searched at any size (1k+).
+        ranges = [by_platform.get(p, [1000, None]) for p in platforms]
+        fmin = min(lo or 0 for lo, _ in ranges) or 1000
+        fmax = None if any(hi is None for _, hi in ranges) else max(hi for _, hi in ranges)
+    elif body.follower_min is not None or body.follower_max is not None:
         fmin, fmax = max(0, body.follower_min or 0), body.follower_max
     elif chosen:
         fmin = max(500, min(lo for _, lo, _, _ in chosen))
@@ -753,6 +797,8 @@ async def start_job(company_id: str, body: JobIn):
         "markets": markets,
         "follower_min": fmin,
         "follower_max": fmax,
+        "size_preset": "usual" if by_platform else "",
+        "size_by_platform": by_platform,
         "deal_types": body.deal_types,
         "avoid": body.avoid,
         "example_creators": body.example_creators,
