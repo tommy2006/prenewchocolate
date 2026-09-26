@@ -45,6 +45,15 @@ PROVIDERS = {
         "fallback_models": ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
         "max_tokens": 32000, "batch_size": 15,
     },
+    "gpu": {
+        "label": "Your GPU server", "company": "your own server, e.g. Verda (vLLM)", "kind": "openai",
+        "env": "GPU_SERVER_API_KEY", "url_env": "GPU_SERVER_URL",
+        "base_url": "", "default_model": "scout", "key_url": "", "needs_key": False, "editable_url": True,
+        # A dedicated server costs nothing per request: it checks every creator, several requests at a time,
+        # reads full posts and comments, and gets more time per answer than a cloud API.
+        "self_hosted": True, "max_tokens": 12000, "batch_size": 6, "concurrency": 8, "timeout": 600,
+        "temperature": 0.3,
+    },
     "openrouter": {
         "label": "OpenRouter", "company": "many models, one key", "kind": "openai", "env": "OPENROUTER_API_KEY",
         "base_url": "https://openrouter.ai/api/v1", "default_model": "",
@@ -97,7 +106,8 @@ def ai_config(provider: str | None = None, overrides: dict | None = None, data: 
     api_key = overrides.get("api_key") or saved.get("api_key") or (os.getenv(p["env"]) if p["env"] else "") or ""
     model = overrides.get("model") or saved.get("model") or (
         os.getenv("CLAUDE_MODEL") if provider == "anthropic" else None) or p["default_model"]
-    base_url = overrides.get("base_url") or saved.get("base_url") or p.get("base_url", "")
+    base_url = (overrides.get("base_url") or saved.get("base_url")
+                or (os.getenv(p["url_env"], "") if p.get("url_env") else "") or p.get("base_url", ""))
     if p["kind"] == "ollama":  # older settings saved the OpenAI-compatible address
         base_url = base_url.rstrip("/").removesuffix("/v1")
     workspace_id = (overrides.get("workspace_id") or saved.get("workspace_id")
@@ -117,6 +127,10 @@ def ai_config(provider: str | None = None, overrides: dict | None = None, data: 
         "fallback_models": [m for m in p.get("fallback_models", []) if m != (model or "").strip()],
         "web_search": p.get("web_search", False),
         "local": p.get("local", False),
+        "self_hosted": p.get("self_hosted", False),
+        "concurrency": p.get("concurrency"),
+        "timeout": p.get("timeout", 240),
+        "temperature": p.get("temperature"),
         "ready": bool(model) and (bool(api_key) or not p["needs_key"]) and (p["kind"] == "anthropic" or bool(base_url)),
     }
 

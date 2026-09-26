@@ -33,7 +33,7 @@ Scout automates influencer discovery for brands like Prenew, with a focus on mic
    Every part comes with **evidence**: short claims that cite the posts (and quote the comments) they're based on.
    The AI must cite post and comment references; a claim citing a post that doesn't exist is dropped. A
    **confidence** level says how much data the scores rest on. Rules score everyone at once for free; the search AI
-   re-checks the most promising (12 per search on a local model, 40 on a cloud AI). **Deep evaluation** (one click,
+   re-checks the most promising (12 per search on a laptop model, 40 on a cloud AI, all of them on your own GPU server). **Deep evaluation** (one click,
    uses the writing AI) reads descriptions and up to 30 comments and writes a verdict, who the audience likely is,
    and a collaboration idea. The ranking (**match**) blends Fit and Quality by the brand's campaign goal
    (Sales 65/35, Balanced 60/40, Awareness 50/50). Small, highly engaged, authentic on-niche creators get a **Gem** tag.
@@ -90,6 +90,8 @@ x select, h not a fit, / search.
    - **Search AI** (runs many times per search): **Local AI** is free and runs on this computer through
      [Ollama](https://ollama.com/download). Scout looks at the computer (memory, graphics card), recommends a
      model (for example `qwen3.5:4b` on a laptop without a graphics card) and downloads it with one button.
+     **Your GPU server** runs a large open model on your own machine (for example a Verda instance with 2× H200):
+     no cost per search, so the AI checks *every* creator, several at a time. See *Your own GPU server* below.
      Claude, OpenAI, Gemini, OpenRouter or any OpenAI-compatible API work too, but cost money per search.
    - **Writing AI** (optional, only when you click): drafts outreach messages in the creator's language and
      runs the AI web scout. A paid AI like Claude writes better Finnish or German; a message costs about a cent.
@@ -103,6 +105,25 @@ x select, h not a fit, / search.
    Creators that still can't be scored get a *Retry scoring* button. For a demo, enable billing on the
    Google AI Studio project (Flash-Lite costs cents per search) or use Claude/OpenAI.
    Keys in `.env` still work as a fallback.
+
+### Your own GPU server (Verda or any Linux GPU machine)
+
+`scripts/verda_setup.sh` turns a GPU server into Scout's AI: it installs [vLLM](https://docs.vllm.ai), downloads a
+model that fits (2× H200: *Qwen3-235B-A22B-Instruct-2507 FP8*, strong in Finnish, German and Swedish; smaller
+servers: *Qwen3-30B-A3B-Instruct-2507*), and runs it as a service with an API key that restarts by itself, also
+after a spot instance comes back. From your computer:
+
+```bash
+scp scripts/verda_setup.sh root@SERVER-IP:
+ssh root@SERVER-IP 'bash verda_setup.sh'
+```
+
+The first run takes 20–40 minutes (mostly the model download, kept for next time). At the end it prints the
+**address** and **API key**: paste them in Settings → *Your GPU server* (model `scout`), choose it as the search AI
+and the writing AI, and Save. The address is plain HTTP protected by the key; for an encrypted connection run
+`PUBLIC=0 bash verda_setup.sh` and use an SSH tunnel (`ssh -N -L 8000:localhost:8000 root@SERVER-IP`, address
+`http://localhost:8000/v1`). If the address doesn't answer, open TCP port 8000 in the server's firewall.
+Other options: `MODEL=org/name` for another Hugging Face model, `PORT=...`. The optional AI web scout still needs Claude.
 
 Check everything from the command line with `.venv/Scripts/python scripts/check_keys.py`.
 

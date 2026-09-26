@@ -186,12 +186,13 @@ async def _json_openai(ai, system, user, schema, max_tokens, patient: bool = Tru
         (system + hint, {}),
     ]
     problem = ""
-    async with httpx.AsyncClient(timeout=240) as http:
+    async with httpx.AsyncClient(timeout=ai.get("timeout", 240)) as http:
         for sys_text, extra in attempts:
             body = {
                 "model": ai["model"],
                 "messages": [{"role": "system", "content": sys_text}, {"role": "user", "content": user}],
                 ai["max_tokens_param"]: min(max_tokens, ai["max_tokens"]),
+                **({"temperature": ai["temperature"]} if ai.get("temperature") is not None else {}),
                 **extra,
             }
             r = await _post_with_retry(http, url, headers, body, patient)

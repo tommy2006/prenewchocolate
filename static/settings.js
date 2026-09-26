@@ -161,7 +161,7 @@ async function openSettings() {
     let model = d.model ?? p.model;
     const l = loaded[provider];
     if (l && !l.manual && !l.models.includes(model)) model = l.recommended;
-    const keyField = p.needs_key || provider === "custom" ? `
+    const keyField = p.needs_key || (p.editable_url && !p.local) ? `
       <div class="field"><span>API key${p.needs_key ? "" : ' <span class="muted">(if the server needs one)</span>'}</span>
         <div class="key-row">
           <input type="password" id="ai-key" value="${esc(d.api_key || "")}" autocomplete="new-password"
@@ -177,7 +177,8 @@ async function openSettings() {
         <small>Organization-wide Claude keys need it. Find it in the Claude Console under Settings → Workspaces, or create the API key inside a workspace instead.</small>
       </div>` : ""}
       ${p.editable_url ? `<div class="field"><span>Address</span>
-        <input type="url" id="ai-url" value="${esc(d.base_url ?? p.base_url)}" placeholder="https://your-server/v1"></div>` : ""}
+        <input type="url" id="ai-url" value="${esc(d.base_url ?? p.base_url)}" placeholder="${provider === "gpu" ? "http://YOUR-SERVER-IP:8000/v1" : "https://your-server/v1"}">
+        ${provider === "gpu" ? `<small>Run <code>scripts/verda_setup.sh</code> on the server once; it prints the address and key to paste here.</small>` : ""}</div>` : ""}
       <div class="field"><span>Model</span>
         <div class="key-row">
           ${modelFieldHtml(p, model)}

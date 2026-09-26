@@ -362,6 +362,13 @@ MIN_MARKET_FIT = 35  # below this the creator's audience is clearly outside the 
 AI_CHECK = {"local": 10, "cloud": 40}  # creators the AI re-checks per search; the rest keep their quick score
 
 
+def check_limit(ai: dict) -> int:
+    """How many creators the AI re-checks per search. Your own GPU server costs nothing per request: all of them."""
+    if ai.get("self_hosted"):
+        return config.MAX_SCORE_PER_JOB
+    return AI_CHECK["local" if ai["local"] else "cloud"]
+
+
 async def _plan(company: dict, search: dict, platforms: list[str], ai: dict) -> tuple[list[dict], str]:
     """Local-language search terms: remembered per search, else the AI writes them, else templates."""
     key = json.dumps(["v2", sorted(search["markets"]), sorted(platforms), sorted(search.get("tags") or []),
@@ -420,7 +427,7 @@ async def score_pool(job: dict, company: dict, pool: list[dict], ai: dict) -> No
     if not ai["ready"]:
         _step(job, "score", "AI check", "skipped", "no AI set up; quick scores only")
         return
-    await ai_check(job, company, ranked[:AI_CHECK["local" if ai["local"] else "cloud"]], ai)
+    await ai_check(job, company, ranked[:check_limit(ai)], ai)
 
 
 async def ai_check(job: dict, company: dict, creators: list[dict], ai: dict) -> None:
@@ -433,8 +440,9 @@ async def ai_check(job: dict, company: dict, creators: list[dict], ai: dict) -> 
     label = f"AI check with {ai['label']}" + (" (on this computer)" if ai["local"] else "")
     _step(job, "score", label, detail=f"0 / {len(creators)}")
     company_matches = store.matches.setdefault(company["id"], {})
-    # A laptop runs one local request at a time; Claude handles parallel batches well; free tiers need care.
-    sem = asyncio.Semaphore(1 if ai["local"] else config.SCORE_CONCURRENCY if ai["kind"] == "anthropic" else 2)
+    # A laptop runs one local request at a time; Claude and your own GPU server handle parallel batches well;
+    # free tiers need care.
+    sem = asyncio.Semaphore(ai.get("concurrency") or (1 if ai["local"] else config.SCORE_CONCURRENCY if ai["kind"] == "anthropic" else 2))
     outside = 0
 
     async def check(batch):
@@ -494,7 +502,7 @@ async def retry_scoring(job_id: str) -> None:
     job["status"] = "running"
     earlier = job.get("new", 0)
     try:
-        await ai_check(job, company, waiting[:AI_CHECK["local" if ai["local"] else "cloud"]], ai)
+        await ai_check(job, company, waiting[:check_limit(ai)], ai)
         job["status"] = "done"
     except asyncio.CancelledError:
         _stopped(job)

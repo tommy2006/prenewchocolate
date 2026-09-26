@@ -16,8 +16,8 @@ from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
 from .metrics import agency_hint
 from .sources import youtube
-from .pipeline import (fetch_linked, merge_ai, rebuild, rescore_company, retry_scoring, run_job, search_of,
-                       upgrade_library)
+from .pipeline import (check_limit, fetch_linked, merge_ai, rebuild, rescore_company, retry_scoring, run_job,
+                       search_of, upgrade_library)
 from .store import DEFAULT_PROFILE, DEFAULT_SEARCH, GOALS, new_id, now_iso, store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -79,6 +79,7 @@ async def meta():
 def _ai_summary() -> dict:
     ai, writer = settings.ai_config(), settings.writer_config()
     return {"provider": ai["provider"], "label": ai["label"], "model": ai["model"], "local": ai["local"],
+            "check_limit": check_limit(ai),
             "ready": ai["ready"], "web_search": settings.scout_config() is not None,
             "writer": {"label": writer["label"], "model": writer["model"], "local": writer["local"]}}
 

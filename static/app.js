@@ -1035,7 +1035,7 @@ function renderJob() {
       <strong>${esc(title)}</strong>
       <span class="muted">${esc(where)} · ${esc(on)}${job.tags?.length ? ` · ${esc(job.tags.join(", "))}` : ""}${job.focus ? ` · “${esc(job.focus)}”` : ""}</span>
       <span class="spacer"></span>
-      ${!running && unscored && S.meta.sources.ai ? `<button class="btn small" data-act="retry-scoring" title="Let the search AI read their posts and re-score them">Check ${Math.min(unscored, S.meta.ai.local ? 10 : 40)} more with AI</button>` : ""}
+      ${!running && unscored && S.meta.sources.ai ? `<button class="btn small" data-act="retry-scoring" title="Let the search AI read their posts and re-score them">Check ${Math.min(unscored, S.meta.ai.check_limit || 40)} more with AI</button>` : ""}
       ${running ? `<button class="btn small" data-act="stop-job">Stop</button>` : '<button class="btn small" data-act="dismiss-job">Dismiss</button>'}
     </div>
     <div class="bar"><i style="width:${jobProgress(job)}%"></i></div>
