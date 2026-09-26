@@ -5,7 +5,7 @@ import logging
 
 import httpx
 
-from . import audience, config, linking, llm, metrics, rules, scoring, settings
+from . import audience, config, linking, llm, lookalike, metrics, rules, scoring, settings, tracker
 from .images import cache_creator_images
 from .markets import MARKETS
 from .sources import tiktok, youtube
@@ -14,6 +14,7 @@ from .store import now_iso, store
 log = logging.getLogger("scout")
 
 ACTIVE_DAYS = 120  # ignore creators who haven't posted in ~4 months
+LINKED_LABEL = "Linked from their other profile"
 
 
 def _step(job: dict, key: str, label: str, status: str = "running", detail: str = "") -> None:
@@ -134,6 +135,27 @@ async def _scout(http, job, company, market, platforms):
     return out
 
 
+async def _similar(http, job: dict, company: dict, platforms: list[str], size_of) -> list[dict]:
+    """"Find more like these": the creators that the starting creators mention or feature."""
+    status = settings.source_status()
+    seeds = [store.creators[cid] for cid in job.get("seed_ids", []) if cid in store.creators]
+    if job.get("seed_handles"):
+        label = "Looking up the creators you like"
+        _step(job, "seeds", label)
+        fresh = await lookalike.seeds_from_handles(http, job["seed_handles"], status)
+        for c in fresh:
+            metrics.compute(c)
+        _step(job, "seeds", label, "done", f"found {len(fresh)} profiles for {len(job['seed_handles'])} names")
+        seeds += fresh
+    if not seeds:
+        raise ValueError("None of the starting creators could be found on YouTube or TikTok")
+    if job.get("seed_handles"):
+        job["seed_names"] = lookalike.seed_label(seeds)
+    matched = store.matches.get(company["id"], {})
+    known = {k for cid in matched if cid in store.creators for k in linking.own_keys(store.creators[cid])}
+    return await lookalike.expand(http, seeds, platforms, size_of, known)
+
+
 async def _youtube_seeds(http, queries: list[str], market: str, lang: str) -> list[dict]:
     found = await youtube.discover(http, queries, market, lang, None, None, max_channels=25)
     for c in found:
@@ -179,16 +201,22 @@ async def run_job(job_id: str) -> None:
     ai = settings.ai_config()
     job["ai"] = f"{ai['label']} · {ai['model']}" if ai["ready"] else "no AI (quick scores only)"
     markets = [m for m in job["markets"] if m in MARKETS]
+    similar = job.get("mode") == "lookalike"
     try:
-        _step(job, "plan", "Planning local-language searches")
-        plans, how = await _plan(company, {**job, "markets": markets}, platforms, ai)
-        n_queries = sum(len(p["youtube_queries"]) + len(p["tiktok_queries"]) + len(p["tiktok_hashtags"]) for p in plans)
-        _step(job, "plan", "Planning local-language searches", "done",
-              f"{n_queries} searches across {len(plans)} markets ({how})")
-        job["plan"] = plans
+        plans = []
+        if not similar:
+            _step(job, "plan", "Planning local-language searches")
+            plans, how = await _plan(company, {**job, "markets": markets}, platforms, ai)
+            n_queries = sum(len(p["youtube_queries"]) + len(p["tiktok_queries"]) + len(p["tiktok_hashtags"]) for p in plans)
+            _step(job, "plan", "Planning local-language searches", "done",
+                  f"{n_queries} searches across {len(plans)} markets ({how})")
+            job["plan"] = plans
 
         async with httpx.AsyncClient() as http:
             tasks = []
+            if similar:
+                tasks.append(_run_source(job, "similar", "Creators they mention or feature",
+                                         _similar(http, job, company, platforms, size_of)))
             for plan in plans:
                 m = plan["market"]
                 lang = MARKETS[m]["languages"][0]
@@ -230,11 +258,15 @@ async def run_job(job_id: str) -> None:
             already = store.matches.get(company["id"], {})
             pool, outside = [], 0
             for c in candidates.values():
+                if c["id"] in already:
+                    # Known already: just remember this search found them too (the tracker check counts it).
+                    prev = store.creators.get(c["id"])
+                    if prev:
+                        prev["found_via"] = sorted(set(prev.get("found_via", []) + c["found_via"]))
+                    continue
                 if not metrics.in_range(c.get("followers"), *size_of(c["platform"])):
                     continue
                 if c.get("days_since_last_post") is None or c["days_since_last_post"] > ACTIVE_DAYS:
-                    continue
-                if c["id"] in already:
                     continue
                 if outside_markets(c, markets):
                     outside += 1
@@ -272,6 +304,68 @@ async def run_job(job_id: str) -> None:
     finally:
         job["finished_at"] = now_iso()
         company["last_job_id"] = job_id
+        store.save()
+
+
+async def run_tracker(job_id: str) -> None:
+    """Complete my tracker: find each creator of the company's collaboration tracker on YouTube and TikTok,
+    add them to the library and score them. Their numbers fill the tracker's blanks, and their scores are a
+    sanity check of the scoring (these are creators the brand picked itself)."""
+    job = store.jobs[job_id]
+    company = store.companies[job["company_id"]]
+    job["status"] = "running"
+    items = (company.get("partners") or {}).get("items", [])
+    status = settings.source_status()
+    ai = settings.ai_config()
+    job["ai"] = f"{ai['label']} · {ai['model']}" if ai["ready"] else "no AI (quick scores only)"
+    try:
+        label = f"Looking up the {len(items)} creators in your tracker"
+        _step(job, "lookup", label, detail=f"0 / {len(items)}")
+        async with httpx.AsyncClient() as http:
+            results = await tracker.resolve_all(
+                http, items, status, on_progress=lambda n: _step(job, "lookup", label, detail=f"{n} / {len(items)}"))
+            found = list({c["id"]: c for r in results.values() for c in r["profiles"]}.values())
+            for c in found:
+                metrics.compute(c)
+            counts = {k: sum(1 for r in results.values() if r["status"] == k) for k in ("found", "twitch")}
+            detail = f"found {counts['found']} of {len(items)}"
+            if counts["twitch"]:
+                detail += f"; {counts['twitch']} only on Twitch (not searched)"
+            _step(job, "lookup", label, "done", detail)
+            matches = store.matches.setdefault(company["id"], {})
+            pool = [c for c in found if c["id"] not in matches]
+            sem = asyncio.Semaphore(12)
+            await asyncio.gather(*(cache_creator_images(http, c, sem) for c in pool))
+            await _comments_step(http, job, pool)
+        fresh = {c["id"] for c in pool}
+        for c in found:
+            prev = store.creators.get(c["id"])
+            if c["id"] in fresh:
+                audience.assess(c)
+                c["found_via"] = sorted(set((prev or {}).get("found_via", []) + c["found_via"]))
+                c["fetched_at"] = now_iso()
+                store.creators[c["id"]] = c
+            elif prev:
+                prev["found_via"] = sorted(set(prev.get("found_via", []) + c["found_via"]))
+        company["partners"]["lookup"] = {
+            "at": now_iso(),
+            "results": {name: {"status": r["status"], "ids": [c["id"] for c in r["profiles"]], "sure": r["sure"], "how": r["how"]}
+                        for name, r in results.items()},
+        }
+        job["partners_found"], job["partners_total"] = counts["found"], len(items)
+        store.save()
+        job["keep_all"] = True  # past partners stay in, whatever their market fit
+        await score_pool(job, company, pool, ai)
+        await _link_step(job, company)
+        job["status"] = "done"
+    except asyncio.CancelledError:
+        _stopped(job)
+    except Exception as e:
+        log.exception("tracker lookup %s failed", job_id)
+        job["status"] = "error"
+        job["error"] = str(e)[:300]
+    finally:
+        job["finished_at"] = now_iso()
         store.save()
 
 
@@ -322,7 +416,7 @@ async def fetch_linked(creators: list[dict], limit: int = LINK_LOOKUPS) -> int:
                 have.add(key)
     if not any(want.values()):
         return 0
-    label = "Linked from their other profile"
+    label = LINKED_LABEL
     found = []
     async with httpx.AsyncClient() as http:
         for network, source in (("youtube", youtube), ("tiktok", tiktok)):
@@ -418,7 +512,7 @@ async def score_pool(job: dict, company: dict, pool: list[dict], ai: dict) -> No
     outside, ranked = 0, []
     for c in pool:
         r = rules.quick_score(c, company, job)
-        if r["market_fit"] < MIN_MARKET_FIT:
+        if r["market_fit"] < MIN_MARKET_FIT and not job.get("keep_all"):
             outside += 1
             continue
         company_matches[c["id"]] = build_match(c, r, job["id"], job["markets"], company)
@@ -470,7 +564,7 @@ async def ai_check(job: dict, company: dict, creators: list[dict], ai: dict) -> 
             match = rebuild(old, c, company, merge_ai(rules.quick_score(c, company, job), r))
             if c["id"] in job["unscored"]:
                 job["unscored"].remove(c["id"])
-            if match["fit_parts"]["market"] < MIN_MARKET_FIT:
+            if match["fit_parts"]["market"] < MIN_MARKET_FIT and not job.get("keep_all"):
                 outside += 1
                 company_matches.pop(c["id"], None)
                 continue

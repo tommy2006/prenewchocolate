@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from .. import settings
-from ..metrics import in_range
+from ..metrics import in_range, mentions_in
 
 API = "https://www.googleapis.com/youtube/v3"
 
@@ -58,6 +58,31 @@ async def fetch_channels(http, ids: list[str]) -> list[dict]:
     return out
 
 
+async def channel_by_handle(http, handle: str) -> dict | None:
+    """The channel with exactly this @handle, with its statistics (1 quota unit). None if there's none."""
+    try:
+        data = await _get(http, "channels", part="snippet,statistics,brandingSettings,contentDetails",
+                          forHandle="@" + handle.lstrip("@"))
+    except YouTubeError:  # not a valid handle
+        return None
+    items = data.get("items", [])
+    return items[0] if items else None
+
+
+async def featured_channels(http, channel_id: str) -> list[str]:
+    """Channels a creator features on their own channel page: friends, collab partners, second channels (1 unit)."""
+    try:
+        data = await _get(http, "channelSections", part="contentDetails", channelId=channel_id)
+    except YouTubeError:
+        return []
+    ids = []
+    for section in data.get("items", []):
+        for cid in (section.get("contentDetails") or {}).get("channels") or []:
+            if cid != channel_id and cid not in ids:
+                ids.append(cid)
+    return ids
+
+
 async def fetch_recent_videos(http, uploads_playlist: str, n: int = 30) -> list[dict]:
     """Enough uploads to cover ~90 days for most channels (2 quota units either way)."""
     data = await _get(http, "playlistItems", part="contentDetails", playlistId=uploads_playlist, maxResults=n)
@@ -87,7 +112,7 @@ def _is_short(video: dict) -> bool:
     return secs is not None and (secs <= 60 or (secs <= 180 and "#short" in text))
 
 
-def _subs(channel: dict) -> int | None:
+def subscribers(channel: dict) -> int | None:
     st = channel.get("statistics", {})
     if st.get("hiddenSubscriberCount") or "subscriberCount" not in st:
         return None
@@ -143,11 +168,14 @@ def to_creator(channel: dict, videos: list[dict], found_via: str) -> dict:
         "bio_link": None,
         "country": (sn.get("country") or branding.get("country") or "").upper(),
         "language": audio.most_common(1)[0][0] if audio else channel_lang,
-        "followers": _subs(channel),
+        "followers": subscribers(channel),
         "posts_count": _int(st.get("videoCount")),
         "verified": False,
         "recent_posts": posts,
         "found_via": [found_via],
+        # Who they @mention in titles and descriptions ("ft. @friend"): for "find more like these".
+        "mentions": mentions_in(handle, *(v.get("snippet", {}).get("title", "") + "\n" + v.get("snippet", {}).get("description", "")[:1500]
+                                           for v in videos[:15])),
         # Business emails and other socials are often only in video descriptions ("Business: ...").
         # Read by metrics.compute for contact extraction, then dropped.
         "_contact_text": "\n".join(v.get("snippet", {}).get("description", "")[:1500] for v in videos[:15]),
@@ -182,7 +210,12 @@ async def discover(http, queries: list[str], market: str, language: str, fmin, f
         for cid in ids:
             via.setdefault(cid, f"YouTube search “{q}” ({market})")
     channels = await fetch_channels(http, list(via))
-    channels = [c for c in channels if in_range(_subs(c), fmin, fmax)][:max_channels]
+    channels = [c for c in channels if in_range(subscribers(c), fmin, fmax)][:max_channels]
+    return await _build(http, channels, via)
+
+
+async def build(http, channels: list[dict], via: dict[str, str]) -> list[dict]:
+    """Full creator records (with recent videos) for channels already fetched; `via` = channel id -> found via."""
     return await _build(http, channels, via)
 
 

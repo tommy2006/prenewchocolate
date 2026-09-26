@@ -170,7 +170,7 @@ async def _details(http, c: dict) -> dict:
 
 
 def _finish(c: dict, label: str) -> dict:
-    c.pop("_mentions", None)
+    c["mentions"] = (c.pop("_mentions", None) or [])[:15]  # who they @mention: for "find more like these"
     for p in c["recent_posts"]:
         p.pop("id", None)
     c["recent_posts"] = c["recent_posts"][:20]
@@ -210,5 +210,15 @@ async def discover(http, queries: list[str], hashtags: list[str], market: str, f
 async def lookup_handles(http, handles: list[str], label: str) -> list[dict]:
     """Full records for known @handles (AI web scout, or a TikTok linked from a YouTube channel)."""
     quick = [c for c in await asyncio.gather(*(_quick(http, h.lstrip("@")) for h in handles)) if c]
+    return await complete(http, quick, label)
+
+
+async def profile(http, handle: str) -> dict | None:
+    """Followers, bio and latest videos for one @handle (one request). None if there's no such public account."""
+    return await _quick(http, handle.lstrip("@"))
+
+
+async def complete(http, quick: list[dict], label: str) -> list[dict]:
+    """Likes, comments, country and language for profiles from profile()."""
     full = await asyncio.gather(*(_details(http, c) for c in quick))
     return [_finish(c, label) for c in full]

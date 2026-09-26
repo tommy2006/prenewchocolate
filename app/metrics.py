@@ -88,6 +88,16 @@ def extract_links(*texts) -> list[str]:
     return found[:8]
 
 
+MENTION = re.compile(r"(?<![\w.@/])@([A-Za-z0-9_.\-]{3,30})")
+
+
+def mentions_in(own_handle: str, *texts) -> list[str]:
+    """@handles written in posts ("ft. @friend"), lowercased, their own left out. Emails aren't matched."""
+    own = own_handle.lstrip("@").lower()
+    found = [h.lower().rstrip(".-") for text in texts for h in MENTION.findall(text or "")]
+    return [h for h in dict.fromkeys(found) if h != own and len(h) >= 3][:15]
+
+
 def extract_socials(own_platform: str, *texts) -> dict[str, str]:
     """The creator's other profiles (first match per network), e.g. their Instagram linked from a YouTube bio."""
     found = {}

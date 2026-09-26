@@ -57,6 +57,8 @@ const ICONS = {
   down: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>',
   chev: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>',
   chart: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20h16M7 16v-4M12 16V8M17 16v-7"/></svg>',
+  people: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15.8 14.3A5 5 0 0 1 21 19.5"/></svg>',
+  download: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>',
 };
 
 function toast(msg, kind = "", action = null) {
@@ -149,16 +151,19 @@ function chipSelect(root, options, selected, onChange) {
 function chipInput(root, initial = [], placeholderText = "Type and press Enter", onChange = null) {
   let values = [...initial];
   const changed = () => onChange?.([...values]);
+  let rendering = false;  // replacing the focused input fires its blur: don't add the same text twice
   const render = () => {
+    rendering = true;
     root.innerHTML = values.map((v, i) => `<span class="tchip">${esc(v)}<button type="button" data-i="${i}" aria-label="Remove ${esc(v)}">×</button></span>`).join("")
       + `<input type="text" placeholder="${esc(placeholderText)}">`;
+    rendering = false;
     const input = $("input", root);
     input.addEventListener("keydown", (e) => {
       if ((e.key === "Enter" || e.key === ",") && input.value.trim()) { e.preventDefault(); add(input.value); }
       else if (e.key === "Enter") e.preventDefault();
       else if (e.key === "Backspace" && !input.value && values.length) { values.pop(); render(); changed(); $("input", root).focus(); }
     });
-    input.addEventListener("blur", () => { if (input.value.trim()) add(input.value, false); });
+    input.addEventListener("blur", () => { if (!rendering && input.value.trim()) add(input.value, false); });
   };
   const add = (v, refocus = true) => {
     v = v.trim().replace(/,$/, "");
@@ -1000,6 +1005,7 @@ function renderDetail(d) {
           <button class="btn ${starred ? "dark" : "primary"}" data-act="panel-star">${starred ? ICONS.starOn + " On shortlist" : ICONS.star + " Add to shortlist"}</button>
           ${m.status === "hidden" ? `<button class="btn" data-act="panel-unhide">Unhide</button>` : `<button class="btn" data-act="panel-hide">Not a fit ${ICONS.chev}</button>`}
           <button class="btn" data-stats="${esc(c.id)}">${ICONS.chart} See stats</button>
+          <button class="btn" data-act="similar-one" title="Search for creators ${esc(c.name)} mentions or features in their videos">${ICONS.people} Find more like this</button>
           <a class="btn" href="${esc(cr.url)}" target="_blank" rel="noopener">${ICONS.ext} Open on ${esc(platform)}</a>
           ${S.meta.sources.ai ? `<button class="btn ${m.checked === "deep" ? "" : "accent"}" data-act="deep" title="Reads their posts, descriptions and viewer comments, and judges fit like a marketer would (uses the writing AI, about a minute)">${ICONS.sparkle} ${m.checked === "deep" ? "Evaluate again" : "Deep evaluation"}</button>` : ""}
         </div>
@@ -1349,6 +1355,31 @@ function flagRow(id) {
   setTimeout(() => row.classList.remove("attention"), 1500);
 }
 
+// Searches that start from creators you know, and the tracker lookup: same progress panel as a search.
+async function startSpecialJob(url, body = {}) {
+  try {
+    S.job = await api(url, { method: "POST", body });
+  } catch (err) { return toast(err.message, "err"); }
+  if ($("#company").open) $("#company").close();
+  closeDetail();
+  if (S.view !== "discover") showView("discover");
+  S.viewJob = S.job.id;
+  S.page = 1;
+  loadCreators({ quiet: true });
+  renderJob();
+  startPolling();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+const searchBody = () => Object.fromEntries(Object.keys(DEFAULT_SEARCH).map((k) => [k, S.f[k]]));
+const findSimilar = (source, extra = {}) => startSpecialJob(`/api/companies/${S.company.id}/similar`, { ...searchBody(), source, ...extra });
+
+async function reloadCompany() {
+  try {
+    S.companies = await api("/api/companies");
+    S.company = S.companies.find((x) => x.id === S.company.id) || S.company;
+  } catch { /* keep what we have */ }
+}
+
 async function startFind() {
   const src = S.meta.sources;
   if (!src.ai) { openSettings(); return toast("First choose an AI in Settings", "err"); }
@@ -1389,6 +1420,9 @@ function jobProgress(job) {
   let p = 4;
   if (steps.find((s) => s.key === "plan")?.status === "done") p = 12;
   p += srcDone * 40;
+  const lookup = steps.find((s) => s.key === "lookup" && s.status === "running");
+  const [n, total] = (lookup?.detail || "").split(" / ").map(Number);
+  if (total) p = 4 + (n / total) * 52;
   if (steps.find((s) => s.key === "filter")?.status === "done") p = 56;
   if (steps.find((s) => s.key === "comments")?.status === "done") p = 60;
   if (job.to_score) p = 60 + (job.scored / job.to_score) * 40;
@@ -1406,16 +1440,24 @@ function renderJob() {
   const on = job.platforms.map((p) => S.meta.platforms[p]).join(", ");
   const unscored = job.unscored?.length || 0;
   const current = (job.steps || []).filter((s) => s.status === "running").map((s) => s.label).join(" · ");
+  const quick = unscored ? ` (${unscored} with a quick score only)` : "";
   const title = running ? (current || "Starting…")
-    : job.status === "done" ? `Done: ${job.new ?? 0} new creators ranked${unscored ? ` (${unscored} with a quick score only)` : ""}`
+    : job.status === "done" ? (job.mode === "tracker" ? `Looked up ${job.partners_found ?? 0} of ${job.partners_total ?? 0} creators from your tracker${quick}`
+      : job.mode === "lookalike" ? (job.new ? `Done: ${job.new} creators like ${job.seed_names || "yours"}${quick}`
+        : `Nothing new: ${job.seed_names || "they"} don't mention or feature anyone you don't have yet`)
+      : `Done: ${job.new ?? 0} new creators ranked${quick}`)
     : job.status === "stopped" ? `Stopped: ${job.new ?? 0} creators ranked before you stopped` : "Search stopped";
+  const what = job.mode === "tracker" ? "Your collaboration tracker"
+    : job.mode === "lookalike" ? `Creators ${esc(job.seed_names || "you know")} mention or feature · ${esc(where)} · ${esc(on)}`
+    : `${esc(where)} · ${esc(on)}${job.tags?.length ? ` · ${esc(job.tags.join(", "))}` : ""}${job.focus ? ` · “${esc(job.focus)}”` : ""}`;
   const open = el.querySelector("details")?.open;
   el.innerHTML = `
     <div class="job-top">
       ${running ? '<span class="spinner"></span>' : `<span class="jdot ${job.status}"></span>`}
       <strong>${esc(title)}</strong>
-      <span class="muted">${esc(where)} · ${esc(on)}${job.tags?.length ? ` · ${esc(job.tags.join(", "))}` : ""}${job.focus ? ` · “${esc(job.focus)}”` : ""}</span>
+      <span class="muted">${what}</span>
       <span class="spacer"></span>
+      ${job.mode === "tracker" && job.status === "done" ? `<a class="btn small" href="/api/companies/${esc(job.company_id)}/tracker/export" download>${ICONS.download} Completed tracker</a>` : ""}
       ${!running && unscored && S.meta.sources.ai ? `<button class="btn small" data-act="retry-scoring" title="Let the search AI read their posts and re-score them">Check ${Math.min(unscored, S.meta.ai.check_limit || 40)} more with AI</button>` : ""}
       ${running ? `<button class="btn small" data-act="stop-job">Stop</button>` : '<button class="btn small" data-act="dismiss-job">Dismiss</button>'}
     </div>
@@ -1440,7 +1482,11 @@ function startPolling() {
     } else {
       S.pollTimer = null;
       loadCreators();
-      if (S.job.status === "done") toast(`${S.job.new ?? 0} new creators ranked`, "ok");
+      if (S.job.status === "done") {
+        toast(S.job.mode === "tracker" ? `Looked up ${S.job.partners_found ?? 0} of ${S.job.partners_total ?? 0} creators from your tracker`
+          : S.job.mode === "lookalike" ? `${S.job.new ?? 0} creators like ${S.job.seed_names || "yours"}` : `${S.job.new ?? 0} new creators ranked`, "ok");
+        if (S.job.mode === "tracker") reloadCompany();
+      }
       else if (S.job.status === "stopped") toast(`Search stopped. ${S.job.new ?? 0} creators were ranked before that.`);
       else toast(S.job.error || "Search failed", "err");
     }
@@ -1510,9 +1556,10 @@ function openCompanyForm(company) {
         <label class="field span2"><span>Values and tone <em class="opt">optional</em></span><input type="text" id="co-values" value="${esc(p.values || "")}" placeholder="e.g. Trustworthy, value for money, less e-waste"></label>
         <div class="field span2"><span>Never work with <em class="opt">optional</em></span><div class="chip-input" id="co-nogo"></div></div>
         ${isNew ? "" : `<div class="field span2"><span>Past collaborations <em class="opt">optional</em></span>
-          <div class="partners-box" id="partners-box">${partnersHtml(co.partners)}</div>
+          <div class="partners-box" id="partners-box">${partnersHtml(co.partners, co.id)}</div>
           <input type="file" id="partners-file" accept=".xlsx,.xlsm,.csv" hidden>
-          <small>Upload your collaboration tracker (Excel or CSV). Scout marks past partners, fills Agency and Year-week in downloads, and shows the AI what has worked for you.</small>
+          <small>Upload your collaboration tracker (Excel or CSV). Scout marks past partners, fills Agency and Year-week in downloads and shows the AI what has worked for you.
+            <b>Look up & complete</b> finds each creator and fills the empty cells of your sheet; <b>Find more like these</b> searches the creators they mention or feature.</small>
           <div id="recall-box"></div></div>`}
       </div>
       <div class="dlg-foot">
@@ -1536,6 +1583,8 @@ function openCompanyForm(company) {
     const act = e.target.closest("[data-act]")?.dataset.act;
     if (act === "partners-upload") return $("#partners-file").click();
     if (act === "partners-remove") return removePartners(co);
+    if (act === "tracker-lookup") return startSpecialJob(`/api/companies/${co.id}/tracker/lookup`);
+    if (act === "similar-partners") return findSimilar("partners");
     if (act === "from-website") return fillFromWebsite(e.target.closest("button"), competitors, nogo, (g2) => {
       goal = g2;
       $$("#co-goal button").forEach((b) => b.classList.toggle("on", b.dataset.goal === g2));
@@ -1617,11 +1666,19 @@ async function fillFromWebsite(btn, competitors, nogo, setGoal) {
   btn.innerHTML = label;
 }
 
-function partnersHtml(p) {
+function partnersHtml(p, coId) {
   if (!p) return `<button type="button" class="btn small" data-act="partners-upload">Upload Excel or CSV</button>`;
-  return `<span><b>${p.count} creators</b>, ${p.collabs} collaborations · ${esc(p.file)}</span>
+  return `<div class="partners-file"><span><b>${p.count} creators</b>, ${p.collabs} collaborations · ${esc(p.file)}</span>
     <button type="button" class="btn small" data-act="partners-upload">Replace</button>
-    <button type="button" class="btn small link danger" data-act="partners-remove">Remove</button>`;
+    <button type="button" class="btn small link danger" data-act="partners-remove">Remove</button></div>
+    <div class="partners-actions">
+      <button type="button" class="btn small accent" data-act="tracker-lookup"
+        data-tip="${esc("Look up & complete\nFinds each creator on YouTube and TikTok, fills the empty cells of your sheet (highlighted, nothing you typed changes) and scores them. Takes a few minutes.")}">${ICONS.sparkle} ${p.looked_up_at ? "Look up again" : "Look up & complete"}</button>
+      ${p.looked_up_at ? `<a class="btn small" href="/api/companies/${esc(coId)}/tracker/export" download>${ICONS.download} Completed tracker</a>
+      <button type="button" class="btn small" data-act="similar-partners"
+        data-tip="${esc("Find more like these\nSearches the creators your past partners mention or feature in their videos: usually local creators in the same niche.")}">${ICONS.people} Find more like these</button>
+      <span class="muted small">found ${p.looked_up} of ${p.count} · ${esc(ago(p.looked_up_at))}</span>` : ""}
+    </div>`;
 }
 
 // How well Scout's ranking agrees with the team's own history.
@@ -1631,11 +1688,22 @@ async function loadRecall(co) {
   try {
     const r = await api(`/api/companies/${co.id}/recall`);
     if (!r.partners) { box.innerHTML = ""; return; }
-    box.innerHTML = r.found
-      ? `<div class="recall"><b>Check against your history:</b> ${r.found} of your ${r.partners} past partners are in Scout's results;
+    const found = r.found
+      ? `<p><b>Found by Scout's own searches:</b> ${r.found} of your ${r.partners} past partners;
           <b>${r.in_top_quarter}</b> of them rank in the top quarter${r.median_rank_pct != null ? ` (median: top ${r.median_rank_pct}%)` : ""}.
-          <ul>${r.rows.slice(0, 5).map((x) => `<li>${esc(x.name)}: #${x.rank} of ${r.library} · fit ${x.fit ?? "—"}</li>`).join("")}</ul></div>`
-      : `<div class="recall">None of your ${r.partners} past partners are in Scout's results yet. Run searches in their markets to check whether Scout finds them.</div>`;
+          Looking them up doesn't count here.</p>
+          <ul>${r.rows.slice(0, 5).map((x) => `<li><a href="#" data-stats="${esc(x.id)}">${esc(x.name)}</a>: #${x.rank} of ${r.library} found · Fit ${x.fit ?? "—"}</li>`).join("")}</ul>`
+      : `<p><b>Found by Scout's own searches:</b> none of your ${r.partners} past partners yet. Search their markets to check whether Scout finds them on its own.</p>`;
+    const sc = r.scores || {};
+    const lk = r.lookup || {};
+    const missed = [lk.not_found ? `${lk.not_found} not found` : "", lk.twitch ? `${lk.twitch} only on Twitch` : ""].filter(Boolean).join(", ");
+    const scores = !r.looked_up ? `<p class="muted">Press <b>Look up & complete</b> to see how Scout scores your past partners.</p>`
+      : !sc.count ? `<p><b>How Scout scores them:</b> none of them could be looked up${missed ? ` (${missed})` : ""}.</p>`
+      : `<p><b>How Scout scores them:</b> ${sc.count} looked up${missed ? ` (${missed})` : ""}. Median Fit <b>${sc.median_fit}</b>; ${sc.fit_70} of ${sc.count} score 70 or more.
+          ${sc.ai_checked < sc.count ? `<span class="muted">${sc.count - sc.ai_checked} have a quick score only.</span>` : ""}
+          These are creators you picked, so a low score is worth a look: the scoring may be missing something.</p>
+          <ul>${sc.lowest.map((x) => `<li><a href="#" data-stats="${esc(x.id)}">${esc(x.name)}</a>: Fit ${x.fit ?? "—"}${x.weakest ? ` · weakest: ${esc(x.weakest)} (${x.weakest_score})` : ""}</li>`).join("")}</ul>`;
+    box.innerHTML = `<div class="recall">${found}${scores}</div>`;
   } catch { box.innerHTML = ""; }
 }
 
@@ -1648,14 +1716,14 @@ async function uploadPartners(co, input) {
   try {
     const r = await api(`/api/companies/${co.id}/partners?filename=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
     co.partners = r.partners;
-    box.innerHTML = partnersHtml(co.partners);
+    box.innerHTML = partnersHtml(co.partners, co.id);
     toast(`${r.partners.count} past partners imported${r.in_library ? `, ${r.in_library} already in your results` : ""}`, "ok");
     S.companies = await api("/api/companies");
     S.company = S.companies.find((x) => x.id === co.id) || S.company;
     loadRecall(co);
     refresh();
   } catch (err) {
-    box.innerHTML = partnersHtml(co.partners);
+    box.innerHTML = partnersHtml(co.partners, co.id);
     toast(err.message, "err");
   }
 }
@@ -1918,6 +1986,8 @@ function bindEvents() {
     else if (act === "go-discover") { e.preventDefault(); showView("discover"); }
     else if (act === "settings") { toggleCompanyMenu(false); openSettings(); }
     else if (act === "find") startFind();
+    else if (act === "similar-one") findSimilar("creators", { ids: [S.panelId] });
+    else if (act === "similar-liked") { closePops(); findSimilar("liked"); }
     else if (act === "suggest-tags") suggestTags(actEl);
     else if (act === "undo-query" && S.undo) {
       S.f = S.undo;

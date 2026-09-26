@@ -11,13 +11,13 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audience, config, export as exporter, linking, llm, localai, partners, query, rules, scoring, settings
+from . import audience, config, export as exporter, linking, llm, localai, partners, query, rules, scoring, settings, tracker
 from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
 from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint, in_range
 from .sources import youtube
-from .pipeline import (check_limit, fetch_linked, merge_ai, rebuild, rescore_company, retry_scoring, run_job,
-                       search_of, upgrade_library)
+from .pipeline import (LINKED_LABEL, check_limit, fetch_linked, merge_ai, rebuild, rescore_company, retry_scoring,
+                       run_job, run_tracker, search_of, upgrade_library)
 from .store import DEFAULT_PROFILE, DEFAULT_SEARCH, GOALS, new_id, now_iso, store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -656,7 +656,8 @@ async def parse_query(company_id: str, body: QueryIn):
 async def recent_searches(company_id: str, limit: int = 8):
     """The last searches run for this company, to re-run with one click (duplicates merged)."""
     _company(company_id)
-    jobs = sorted((j for j in store.jobs.values() if j["company_id"] == company_id), key=lambda j: j["created_at"], reverse=True)
+    jobs = sorted((j for j in store.jobs.values() if j["company_id"] == company_id and not j.get("mode")),
+                  key=lambda j: j["created_at"], reverse=True)
     out, seen = [], set()
     for j in jobs:
         key = (tuple(sorted(j.get("tags") or [])), tuple(sorted(j["markets"])), tuple(sorted(j["platforms"])),
@@ -684,9 +685,10 @@ async def import_partners(company_id: str, request: Request, filename: str = "tr
         raise HTTPException(400, "That file is too big (10 MB max)")
     try:
         items = partners.parse(data, filename)
+        sheet = partners.sheet(data, filename)
     except partners.TrackerError as e:
         raise HTTPException(400, str(e))
-    company["partners"] = {"file": filename, "imported_at": now_iso(), "items": items}
+    company["partners"] = {"file": filename, "imported_at": now_iso(), "items": items, "sheet": sheet}
     store.save()
     idx = partners.index(company)
     found = sum(1 for cid, m in store.matches.get(company_id, {}).items()
@@ -706,14 +708,27 @@ def _partners_summary(company: dict) -> dict | None:
     p = company.get("partners")
     if not p:
         return None
+    lookup = p.get("lookup") or {}
     return {"file": p["file"], "imported_at": p["imported_at"], "count": len(p["items"]),
-            "collabs": sum(i["collabs"] for i in p["items"])}
+            "collabs": sum(i["collabs"] for i in p["items"]), "looked_up_at": lookup.get("at"),
+            "looked_up": sum(1 for r in (lookup.get("results") or {}).values() if r["status"] == "found")}
+
+
+PART_NAMES = {"content": "content", "audience": "audience", "market": "market", "brand": "brand & safety",
+              "readiness": "readiness & cost"}
+
+
+def _found_by_search(c: dict) -> bool:
+    """Found by one of Scout's own searches, not only looked up from the tracker (or linked from such a profile)."""
+    return any(not v.startswith(tracker.LABEL) and v != LINKED_LABEL for v in c.get("found_via", []))
 
 
 @app.get("/api/companies/{company_id}/recall")
 async def recall(company_id: str):
-    """How well Scout's ranking agrees with the team's own history: which past partners are in the
-    library, and where they rank. A quick sanity check of the scoring on real data."""
+    """How well Scout agrees with the team's own history.
+    1. Which past partners Scout's own searches found, and where they rank (looking them up doesn't count).
+    2. How Scout scores the past partners it could look up: they were picked by the brand, so most should
+       score well; the lowest ones show where the scoring may be too harsh."""
     company = _company(company_id)
     items = (company.get("partners") or {}).get("items", [])
     if not items:
@@ -722,22 +737,44 @@ async def recall(company_id: str):
     matches = store.matches.get(company_id, {})
     ranked = sorted(((m["score"], cid) for cid, m in matches.items() if cid in store.creators), reverse=True)
     position = {cid: i for i, (_, cid) in enumerate(ranked)}
-    found = {}
+    searched = [cid for cid in position if _found_by_search(store.creators[cid])]
+    search_rank = {cid: i for i, cid in enumerate(searched)}  # rank among what the searches found
+    found, scored = {}, {}
     for cid, m in matches.items():
         c = store.creators.get(cid)
         p = partners.find(idx, c, m) if c else None
-        if p and (p["name"] not in found or m["score"] > found[p["name"]]["score"]):
+        if not p:
+            continue
+        if (p["name"] not in scored or m["score"] > scored[p["name"]]["score"]):
+            parts = m.get("fit_parts") or {}
+            weakest = min(parts, key=parts.get) if parts else None
+            scored[p["name"]] = {"name": p["name"], "creator": c.get("name"), "id": cid, "score": m["score"],
+                                 "fit": m.get("fit"), "quality": m.get("quality"), "checked": m.get("checked", "rules"),
+                                 "weakest": PART_NAMES.get(weakest, weakest), "weakest_score": parts.get(weakest)}
+        if cid in search_rank and (p["name"] not in found or m["score"] > found[p["name"]]["score"]):
             found[p["name"]] = {"name": p["name"], "creator": c.get("name"), "id": cid, "score": m["score"],
-                                "fit": m.get("fit"), "rank": position.get(cid, len(ranked)) + 1}
+                                "fit": m.get("fit"), "rank": search_rank[cid] + 1}
     rows = sorted(found.values(), key=lambda r: r["rank"])
-    top = max(1, len(ranked) // 4)
+    top = max(1, len(searched) // 4)
+    fits = sorted(r["fit"] for r in scored.values() if r["fit"] is not None)
+    lookup = (company["partners"].get("lookup") or {})
+    statuses = [r["status"] for r in (lookup.get("results") or {}).values()]
     return {
         "partners": len(items),
-        "library": len(ranked),
+        "library": len(searched),
         "found": len(rows),
         "in_top_quarter": sum(1 for r in rows if r["rank"] <= top),
-        "median_rank_pct": round(100 * sorted(r["rank"] for r in rows)[len(rows) // 2] / len(ranked)) if rows else None,
+        "median_rank_pct": round(100 * sorted(r["rank"] for r in rows)[len(rows) // 2] / len(searched)) if rows else None,
         "rows": rows[:30],
+        "looked_up": bool(lookup),
+        "lookup": {k: statuses.count(k) for k in ("found", "not_found", "twitch", "no_source")},
+        "scores": {
+            "count": len(fits),
+            "median_fit": fits[len(fits) // 2] if fits else None,
+            "fit_70": sum(1 for f in fits if f >= 70),
+            "ai_checked": sum(1 for r in scored.values() if r["checked"] != "rules"),
+            "lowest": sorted(scored.values(), key=lambda r: r["fit"] if r["fit"] is not None else 101)[:5],
+        },
     }
 
 
@@ -757,24 +794,25 @@ class JobIn(SearchIn):
     focus: str = ""  # free text from the search box
 
 
-@app.post("/api/companies/{company_id}/jobs")
-async def start_job(company_id: str, body: JobIn):
-    company = _company(company_id)
+def _platforms(requested: list[str]) -> list[str]:
     sources = settings.source_status()  # no AI set up is fine: planning uses templates, scores come from rules
-    platforms = [p for p in (body.platforms or list(SEARCH_PLATFORMS)) if p in SEARCH_PLATFORMS and sources.get(p)]
+    platforms = [p for p in (requested or list(SEARCH_PLATFORMS)) if p in SEARCH_PLATFORMS and sources.get(p)]
     if not platforms:
         raise HTTPException(400, "None of the chosen platforms is set up yet. Add a YouTube key in Settings, or search TikTok.")
-    markets = [m for m in body.markets if m in MARKETS]
-    if not markets:
-        raise HTTPException(400, "Pick at least one market to search in")
-    running = [j for j in store.jobs.values() if j["company_id"] == company_id and j["status"] in ("queued", "running")]
-    if running:
+    return platforms
+
+
+def _one_at_a_time(company_id: str) -> None:
+    if any(j["company_id"] == company_id and j["status"] in ("queued", "running") for j in store.jobs.values()):
         raise HTTPException(409, "A search is already running for this company")
-    # Size slider (or older size chips) -> follower range. Nothing picked = any size
-    # (Prenew: "find influencers no matter the size").
-    chosen = [t for t in TIERS if t[0] in body.tiers]
+
+
+def _size_range(company: dict, body: SearchIn, platforms: list[str]) -> tuple[int | None, int | None, dict]:
+    """(min, max, per-platform ranges) from the size picked in the search area. Nothing picked = any size
+    (Prenew: "find influencers no matter the size")."""
     by_platform = {p: usual_range(company, p) for p in platforms} if body.size_preset == "usual" else {}
     by_platform = {p: list(r) for p, r in by_platform.items() if r}
+    chosen = [t for t in TIERS if t[0] in body.tiers]
     if by_platform:
         # The company's usual size per platform; a platform without one is searched at any size (1k+).
         ranges = [by_platform.get(p, [1000, None]) for p in platforms]
@@ -787,33 +825,123 @@ async def start_job(company_id: str, body: JobIn):
         fmax = None if any(hi is None for _, _, hi, _ in chosen) else max(hi for _, _, hi, _ in chosen)
     else:
         fmin, fmax = 1000, None
-    company["search"] = SearchIn(**body.model_dump(exclude={"focus"})).model_dump()
+    return fmin, fmax, by_platform
+
+
+def _new_job(company_id: str, platforms: list[str], markets: list[str], size: tuple, **extra) -> dict:
+    fmin, fmax, by_platform = size
     job = {
         "id": new_id("job"),
         "company_id": company_id,
-        "focus": body.focus.strip(),
-        "tags": body.tags,
+        "focus": "",
+        "tags": [],
         "platforms": platforms,
         "markets": markets,
         "follower_min": fmin,
         "follower_max": fmax,
         "size_preset": "usual" if by_platform else "",
         "size_by_platform": by_platform,
-        "deal_types": body.deal_types,
-        "avoid": body.avoid,
-        "example_creators": body.example_creators,
-        "ai_scout": body.ai_scout,
+        "deal_types": [],
+        "avoid": [],
+        "example_creators": [],
+        "ai_scout": False,
         "status": "queued",
         "steps": [],
         "found": 0,
         "scored": 0,
         "to_score": 0,
         "created_at": now_iso(),
+        **extra,
     }
     store.jobs[job["id"]] = job
     store.save()
+    return job
+
+
+@app.post("/api/companies/{company_id}/jobs")
+async def start_job(company_id: str, body: JobIn):
+    company = _company(company_id)
+    platforms = _platforms(body.platforms)
+    markets = [m for m in body.markets if m in MARKETS]
+    if not markets:
+        raise HTTPException(400, "Pick at least one market to search in")
+    _one_at_a_time(company_id)
+    company["search"] = SearchIn(**body.model_dump(exclude={"focus"})).model_dump()
+    job = _new_job(company_id, platforms, markets, _size_range(company, body, platforms),
+                   focus=body.focus.strip(), tags=body.tags, deal_types=body.deal_types, avoid=body.avoid,
+                   example_creators=body.example_creators, ai_scout=body.ai_scout)
     _run(job["id"], run_job(job["id"]))
     return job
+
+
+class SimilarIn(SearchIn):
+    """Find more like these. source: "creators" (ids from the results), "partners" (the looked-up tracker)
+    or "liked" (the "Creators you already like" field)."""
+    source: str = "creators"
+    ids: list[str] = []
+
+
+@app.post("/api/companies/{company_id}/similar")
+async def find_similar(company_id: str, body: SimilarIn):
+    company = _company(company_id)
+    platforms = _platforms(body.platforms)
+    _one_at_a_time(company_id)
+    matches = store.matches.get(company_id, {})
+    seed_ids, handles = [], []
+    if body.source == "partners":
+        lookup = ((company.get("partners") or {}).get("lookup") or {}).get("results") or {}
+        seed_ids = [cid for r in lookup.values() for cid in r["ids"] if cid in store.creators]
+        if not seed_ids:
+            raise HTTPException(400, "Look up the creators in your tracker first (Brand profile, Past collaborations)")
+        label = "your past partners"
+    elif body.source == "liked":
+        handles = [h.strip() for h in (body.example_creators or company["search"].get("example_creators") or []) if h.strip()][:20]
+        if not handles:
+            raise HTTPException(400, "Add creators you like first (More filters, Creators you already like)")
+        label = ", ".join(handles[:3]) + (f" and {len(handles) - 3} more" if len(handles) > 3 else "")
+    else:
+        seed_ids = [cid for cid in dict.fromkeys(body.ids) if cid in store.creators][:30]
+        if not seed_ids:
+            raise HTTPException(400, "Pick at least one creator to start from")
+        names = [store.creators[cid].get("name") or cid for cid in seed_ids]
+        label = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+    # Same markets as the starting creators; else the markets picked in the search area.
+    seed_markets = {(matches.get(cid) or {}).get("country") or store.creators[cid].get("country") for cid in seed_ids}
+    markets = sorted(m for m in seed_markets if m in MARKETS) or [m for m in (body.markets or company["search"].get("markets") or []) if m in MARKETS]
+    if not markets:
+        raise HTTPException(400, "Pick at least one market to search in")
+    job = _new_job(company_id, platforms, markets, _size_range(company, body, platforms), mode="lookalike",
+                   seed_ids=seed_ids, seed_handles=handles, seed_names=label, source=body.source,
+                   deal_types=company["search"].get("deal_types") or [], avoid=company["search"].get("avoid") or [])
+    _run(job["id"], run_job(job["id"]))
+    return job
+
+
+@app.post("/api/companies/{company_id}/tracker/lookup")
+async def lookup_tracker(company_id: str):
+    """Complete my tracker: find every creator of the uploaded tracker on YouTube and TikTok and score them."""
+    company = _company(company_id)
+    items = (company.get("partners") or {}).get("items") or []
+    if not items:
+        raise HTTPException(400, "Upload your collaboration tracker first (Brand profile, Past collaborations)")
+    platforms = _platforms([])
+    _one_at_a_time(company_id)
+    markets = sorted({p["market"] for p in items if p.get("market") in MARKETS})
+    job = _new_job(company_id, platforms, markets, (None, None, {}), mode="tracker")
+    _run(job["id"], run_tracker(job["id"]))
+    return job
+
+
+@app.get("/api/companies/{company_id}/tracker/export")
+async def export_tracker(company_id: str):
+    """The uploaded tracker handed back, row for row, with the blanks Scout could fill filled in (highlighted)."""
+    company = _company(company_id)
+    if not (company.get("partners") or {}).get("items"):
+        raise HTTPException(400, "Upload your collaboration tracker first")
+    data = exporter.tracker_xlsx(company, store.creators, store.matches.get(company_id, {}))
+    name = re.sub(r"[^\w.-]+", "_", (company["partners"].get("file") or "tracker.xlsx").rsplit(".", 1)[0])
+    return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{name}_completed_by_Scout.xlsx"'})
 
 
 @app.post("/api/jobs/{job_id}/retry-scoring")

@@ -68,9 +68,35 @@ def _header_map(row: list) -> dict[str, int]:
     return found
 
 
+def _read(data: bytes, filename: str) -> list[list]:
+    return _rows_xlsx(data) if filename.lower().endswith((".xlsx", ".xlsm")) else _rows_csv(data)
+
+
+def sheet(data: bytes, filename: str) -> dict:
+    """The tracker as it was uploaded (header + non-empty rows), so it can be handed back completed."""
+    rows = _read(data, filename)
+    for i, row in enumerate(rows[:10]):
+        cols = _header_map(row)
+        if "key" in cols or "channel" in cols:
+            width = max(j for j, v in enumerate(row) if v not in (None, "")) + 1
+            body = [[_cell(v) for v in (list(r) + [None] * width)[:width]] for r in rows[i + 1:]]
+            return {"header": [str(v or "").strip() for v in row[:width]],
+                    "rows": [r for r in body if any(v not in (None, "") for v in r)]}
+    raise TrackerError("No 'Creator' or 'Creator / channel' column found in the first rows")
+
+
+def _cell(v):
+    """Numbers stay numbers (whole ones as int), everything else becomes text; JSON-safe."""
+    if isinstance(v, bool) or v is None:
+        return v
+    if isinstance(v, (int, float)):
+        return int(v) if float(v).is_integer() else v
+    return str(v).strip() or None
+
+
 def parse(data: bytes, filename: str) -> list[dict]:
     """Rows of a collaboration tracker -> one entry per creator (repeat collaborations merged)."""
-    rows = _rows_xlsx(data) if filename.lower().endswith((".xlsx", ".xlsm")) else _rows_csv(data)
+    rows = _read(data, filename)
     start, cols = None, {}
     for i, row in enumerate(rows[:10]):
         cols = _header_map(row)
@@ -90,10 +116,13 @@ def parse(data: bytes, filename: str) -> list[dict]:
         name = get(row, "key") or get(row, "channel")
         if not name:
             continue
-        p = people.setdefault(norm(name), {"name": name, "aliases": [], "weeks": [], "platforms": [],
+        p = people.setdefault(norm(name), {"name": name, "aliases": [], "channels": [], "weeks": [], "platforms": [],
                                            "market": "", "niche": "", "agency": False, "collabs": 0,
                                            "yt_subs": None, "tt_followers": None})
         p["collabs"] += 1
+        for raw in (name, get(row, "channel")):
+            if raw and raw not in p["channels"]:
+                p["channels"].append(raw)
         for alias in _aliases(name, get(row, "channel")):
             if alias not in p["aliases"]:
                 p["aliases"].append(alias)

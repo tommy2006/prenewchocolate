@@ -228,3 +228,150 @@ def to_xlsx(people: list[dict]) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# --- The company's own tracker, handed back completed ------------------------------------------------
+
+FILL_COLUMNS = ("Market", "Country", "Creator / channel", "Platform", "Niche / content",
+                "YT subscribers", "YT views / video", "TikTok followers", "TikTok views / video")
+NOW_COLUMNS = [("YT subscribers now", "YT subscribers"), ("YT views / video now", "YT views / video"),
+               ("TikTok followers now", "TikTok followers"), ("TikTok views / video now", "TikTok views / video")]
+TRACKER_EXTRA = [("YouTube", 34), ("TikTok", 34), ("Email", 30), ("YT subscribers now", 12), ("YT views / video now", 12),
+                 ("TikTok followers now", 12), ("TikTok views / video now", 12), ("Fit", 7), ("Audience quality", 9),
+                 ("Filled by Scout", 30), ("Scout lookup", 34)]
+LOOKUP_TEXT = {
+    "found": "Found", "not_found": "Not found on YouTube or TikTok",
+    "twitch": "Only on Twitch: not searched", "no_source": "Not looked up (platform not set up)",
+}
+TRACKER_ABOUT = [
+    ("Your columns", "Your tracker as you uploaded it, row for row. Cells you left empty are filled in where Scout "
+                     "found the creator; those cells are highlighted. Nothing you typed is changed."),
+    ("... now", "Scout's current numbers, next to what your sheet says. Views: average per video over the last "
+                "30 days (90 for less active creators)."),
+    ("Fit / Audience quality", "Scout's scores for the creator (0-100), the same as in the app."),
+    ("Scout lookup", "Found = a profile with the name from your sheet and a size close to your numbers. "
+                     "'Found by name only' = your sheet had no numbers to compare: please check the link."),
+]
+
+
+def _people_for_partners(company: dict, creators: dict[str, dict], matches: dict[str, dict]) -> dict[str, list[str]]:
+    """partner name -> creator ids: looked up from the tracker, or found in the results by name."""
+    lookup = ((company.get("partners") or {}).get("lookup") or {}).get("results") or {}
+    out = {name: [i for i in r.get("ids", []) if i in creators] for name, r in lookup.items()}
+    idx = partners.index(company)
+    for cid, m in matches.items():
+        c = creators.get(cid)
+        p = partners.find(idx, c, m) if c else None
+        if p and cid not in out.setdefault(p["name"], []):
+            out[p["name"]].append(cid)
+    return out
+
+
+def _lookup_note(company: dict, name: str, found: bool) -> str:
+    r = (((company.get("partners") or {}).get("lookup") or {}).get("results") or {}).get(name)
+    if r:
+        if r["status"] == "found":
+            how = f" ({r['how']})" if r.get("how") else ""
+            return ("Found" if r.get("sure") else "Found by name only: please check") + how
+        return LOOKUP_TEXT.get(r["status"], r["status"])
+    return "Found by Scout's searches" if found else "Not looked up yet"
+
+
+def tracker_xlsx(company: dict, creators: dict[str, dict], matches: dict[str, dict]) -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    info = company.get("partners") or {}
+    items = {partners.norm(p["name"]): p for p in info.get("items", [])}
+    sheet = info.get("sheet")
+    if not sheet:  # imported before sheets were kept: one row per creator from what we parsed
+        sheet = {"header": [n for n, _ in TRACKER_COLUMNS], "rows": [
+            [p["name"], p["market"], MARKETS.get(p["market"], {}).get("name", ""), " / ".join(p.get("channels", [])[1:]) or p["name"],
+             "Yes" if p["agency"] else "", (p["weeks"] or [""])[-1], " + ".join(p["platforms"]), p["niche"],
+             p["yt_subs"], None, p["tt_followers"], None] for p in info.get("items", [])]}
+    header = sheet["header"]
+    col = {h.strip().lower(): i for i, h in enumerate(header)}
+    key_i = next((col[h] for h in partners.HEADERS["key"] if h in col), None)
+    chan_i = next((col[h] for h in partners.HEADERS["channel"] if h in col), None)
+    group = linking.groups(creators)
+    people = _people_for_partners(company, creators, matches)
+    cache: dict[str, dict | None] = {}
+
+    def person(p: dict) -> dict | None:
+        """The row Scout would write for this partner (profiles merged), or None if we don't have them."""
+        if p["name"] not in cache:
+            ids = [j for i in people.get(p["name"], []) for j in group.get(i, [i])]
+            ids = list(dict.fromkeys(ids))
+            if not ids:
+                cache[p["name"]] = None
+            else:
+                ranked = [i for i in ids if i in matches]
+                primary_id = max(ranked, key=lambda i: matches[i]["score"]) if ranked else ids[0]
+                profs = linking.profiles(ids, creators, prefer=set(ranked))
+                primary = creators[primary_id]
+                profs[primary["platform"]] = primary
+                m = matches.get(primary_id) or {"score": None}
+                extra = [matches[i] for i in ranked if i != primary_id]
+                cache[p["name"]] = _row(primary, m, profs, p, extra)
+        return cache[p["name"]]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Tracker"
+    ws.append(header + [n for n, _ in TRACKER_EXTRA])
+    for i, cell in enumerate(ws[1]):
+        own = i < len(header)
+        cell.font = Font(bold=True, color="FFFFFF" if own else "16161A")
+        cell.fill = PatternFill("solid", fgColor="16161A" if own else "D9D9DE")
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+    filled_fill = PatternFill("solid", fgColor="FFE3CC")
+    for raw in sheet["rows"]:
+        row = list(raw) + [None] * (len(header) - len(raw))
+        name = (row[key_i] if key_i is not None else None) or (row[chan_i] if chan_i is not None else None)
+        p = items.get(partners.norm(name)) if name else None
+        got = person(p) if p else None
+        filled = []
+        if got:
+            for column in FILL_COLUMNS:
+                i = col.get(column.lower())
+                if i is not None and row[i] in (None, "") and got.get(column) not in (None, ""):
+                    row[i] = got[column]
+                    filled.append(column)
+        extra = [(got or {}).get("YouTube"), (got or {}).get("TikTok"), (got or {}).get("Email")] \
+            + [(got or {}).get(src) for _, src in NOW_COLUMNS] \
+            + [(got or {}).get("Fit"), (got or {}).get("Audience quality"), ", ".join(filled),
+               _lookup_note(company, p["name"], bool(got)) if p else ""]
+        ws.append(row + extra)
+        r = ws.max_row
+        for column in filled:
+            ws.cell(row=r, column=col[column.lower()] + 1).fill = filled_fill
+    widths = {n.lower(): w for n, w in TRACKER_COLUMNS}
+    for i, h in enumerate(header + [n for n, _ in TRACKER_EXTRA], start=1):
+        letter = ws.cell(row=1, column=i).column_letter
+        ws.column_dimensions[letter].width = widths.get(h.lower()) or dict(TRACKER_EXTRA).get(h, 14)
+        for cell in ws[letter][1:]:
+            if not isinstance(cell.value, (int, float)):
+                if h in URL_COLS and cell.value:
+                    cell.hyperlink = cell.value
+                    cell.font = Font(color="1D4ED8", underline="single")
+                continue
+            if h in NUMBER_COLS or h in ("YT subscribers now", "TikTok followers now"):
+                cell.number_format = "#,##0"
+            elif h in VIEWS_COLS or h.endswith("views / video now"):
+                cell.number_format = VIEWS_FORMAT
+    ws.freeze_panes = "B2"
+    ws.auto_filter.ref = ws.dimensions
+    ws.row_dimensions[1].height = 32
+    about = wb.create_sheet("How to read")
+    about.append(["Column", "Meaning"])
+    for cell in about[1]:
+        cell.font = Font(bold=True)
+    for line in TRACKER_ABOUT:
+        about.append(list(line))
+    about.column_dimensions["A"].width = 24
+    about.column_dimensions["B"].width = 110
+    for row in about.iter_rows(min_row=2):
+        row[1].alignment = Alignment(wrap_text=True, vertical="top")
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

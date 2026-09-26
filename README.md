@@ -55,7 +55,19 @@ extra columns; a second sheet explains every column.
 
 **Past collaborations.** In *Brand profile* (company menu), upload the collaboration tracker (Excel or CSV). Scout then
 tags creators you've already worked with as *Past partner*, fills *Agency* and *Year-week* for them in downloads, and
-shows the AI the past partners as examples of what fits (niche, size, market, platform).
+shows the AI the past partners as examples of what fits (niche, size, market, platform). Then:
+
+- **Look up & complete** finds each creator of the tracker on YouTube and TikTok by name (the handles the name suggests,
+  then a web search), adds them to the results and scores them. A profile only counts if its size is close to the
+  tracker's numbers; with no numbers, the name must be distinctive and the profile in the right market ("Noah" won't
+  match a random big account). **Completed tracker** hands the sheet back row for row with the empty cells filled
+  (highlighted; nothing you typed changes), plus current numbers, links, email, Fit and Audience quality.
+- **Check against your history** (same window) shows how many past partners Scout's *own searches* found and where they
+  rank (looking them up doesn't count), and how Scout scores the partners it looked up, lowest first, with their
+  weakest part. They were picked by the brand, so a low score shows where the scoring may be missing something.
+- **Find more like these** searches the creators that your past partners @mention in their videos or feature on their
+  channel: usually local creators in the same niche. The same button is in *More filters* for *Creators you already
+  like*, and every creator window has **Find more like this**.
 
 **Data per creator (what Prenew asked for):** country · subscribers/followers · **average and median views over the
 last 30 days** (90 days for less active creators; YouTube Shorts and posts under 2 days old are left out) ·
