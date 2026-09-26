@@ -74,6 +74,25 @@ GAMING_WORDS = re.compile(r"\b(gaming|gamer|gameplay|pelaa|pelit|pelaaja|gamer|s
 GAMBLING = re.compile(r"\b(casino|kasino|betting|vedonly\w*|bet365|stake\.com|gamdom|rollbit|csgoempire|hellcase|"
                       r"skinclub|case opening|skin gambling|roobet)\b", re.I)
 ADULT = re.compile(r"\b(onlyfans|nsfw|18\+ only)\b", re.I)
+CRYPTO = re.compile(r"\b(crypto|krypto\w*|bitcoin|nfts?|forex|memecoin|airdrop|trading bot)\b", re.I)
+SWEAR = re.compile(r"\b(fuck\w*|f\*ck\w*|shit\w*|bitch\w*|motherf\w*|vittu\w*|perkele|saatana|paska\w*|scheiß\w*|scheiss\w*|"
+                   r"arschloch|jävla|helvete|kurva|kurwa|bazdmeg|geci|kurat|perse\w*)\b", re.I)
+DRAMA = re.compile(r"\b(drama|exposed|prank\w*|trolling|scammed|beef|cancelled)\b", re.I)
+# Gaming and tech brands: a sponsorship with one shows they can carry a hardware brand's message.
+TECH_BRANDS = re.compile(r"\b(nvidia|geforce|amd|radeon|ryzen|intel|asus|msi|razer|logitech|corsair|hyperx|steelseries|nzxt|"
+                         r"alienware|lenovo|gigabyte|aorus|samsung|kingston|crucial|be quiet|noctua|elgato|acer|"
+                         r"benq|zowie|roccat|turtle beach|jbl|secretlab|noblechairs|playstation|xbox|nintendo)\b", re.I)
+# A brand's values (from its profile) -> what showing them looks like in posts.
+VALUE_THEMES = [
+    ("value for money", re.compile(r"value for money|budget|afford|cheap|price|expensive", re.I),
+     re.compile(r"\b(budget|cheap\w*|afford\w*|halpa|halvalla|edullinen|günstig\w*|billig\w*|tani|olcsó|odav\w*|"
+                r"price.to.performance|bang for (the|your) buck|under \d+ ?(€|eur|euro|\$))", re.I)),
+    ("less e-waste", re.compile(r"e-waste|sustainab|refurbish|second.hand|\bused\b|reuse|recycl|circular", re.I),
+     re.compile(r"\b(refurbish\w*|second.hand|used (pc|gpu|parts|computer)|käytet\w*|gebraucht\w*|begagnad\w*|használt|"
+                r"kasutatud|upcycl\w*|recycl\w*|repair\w*|korja\w*|old pc|vanha kone|restor\w*|fix(ing)? (my|an|this) (old )?pc)", re.I)),
+    ("trust", re.compile(r"trust|tested|warranty|honest|reliab", re.I),
+     re.compile(r"\b(review\w*|tested|benchmark\w*|honest|arvostelu|testi|testasin|recension|teszt|ülevaade|test)\b", re.I)),
+]
 
 
 def _patterns(words: list[str]) -> re.Pattern:
@@ -329,45 +348,89 @@ def quick_score(c: dict, company: dict, search: dict) -> dict:
                                             pts="max 40" if market > 40 else ""))
             market = min(market, 40)
 
-    # Brand & safety: tone, risks, competitors.
+    # Brand & safety: tone, values, risks, competitors. Starts neutral; what the posts show moves it.
     brand, safety, competitor = scoring.QUICK_START["brand"], 100, False
+    looked = c.get("recent_posts", [])[:12]
+    bio = c.get("bio") or ""
+
+    def mark(sign: str, text: str, change: int = 0, posts: list[dict] | None = None, quotes: list[str] | None = None,
+             unsafe: int = 0, fact: bool = True) -> None:
+        nonlocal brand, safety
+        brand, safety = brand + change, safety - unsafe
+        pts = " ".join(x for x in (f"{change:+d}" if change else "", f"safety -{unsafe}" if unsafe else "") if x)
+        ev.append(scoring.evidence_item("brand", sign, text, posts, quotes, fact=fact, pts=pts))
+
     gambling = _posts_matching(c, GAMBLING)
-    if gambling or GAMBLING.search(c.get("bio") or ""):
-        safety -= 45
-        ev.append(scoring.evidence_item("brand", "-", "Mentions gambling or skin-betting sites" + ("" if gambling else " (in their bio)"),
-                                        scoring.cite(gambling), pts="safety -45"))
+    if gambling or GAMBLING.search(bio):
+        mark("-", "Mentions gambling or skin-betting sites" + ("" if gambling else " (in their bio)"), posts=scoring.cite(gambling), unsafe=45)
     adult = _posts_matching(c, ADULT)
-    if adult or ADULT.search(c.get("bio") or ""):
-        safety -= 50
-        ev.append(scoring.evidence_item("brand", "-", "Adult content signals" + ("" if adult else " (in their bio)"),
-                                        scoring.cite(adult), pts="safety -50"))
+    if adult or ADULT.search(bio):
+        mark("-", "Adult content signals" + ("" if adult else " (in their bio)"), posts=scoring.cite(adult), unsafe=50)
+    crypto = _posts_matching(c, CRYPTO)
+    if crypto or CRYPTO.search(bio):
+        mark("-", "Crypto, NFT or trading content" + ("" if crypto else " (in their bio)") + ": risky next to a brand built on trust",
+             -15, scoring.cite(crypto), unsafe=20)
+    swearing = _posts_matching(c, SWEAR)
+    if len(swearing) >= 2 or (swearing and SWEAR.search(bio)):
+        mark("-", f"Strong language in {len(swearing)} of their last {len(looked)} titles or descriptions", -10, scoring.cite(swearing), unsafe=10)
+    elif len(looked) >= 6:
+        mark("+", f"Clean language in their last {len(looked)} titles and descriptions", 5)
+    drama = _posts_matching(c, DRAMA)
+    if len(drama) >= 2:
+        mark("-", f"Drama or prank videos ({len(drama)} of their last {len(looked)}): harder to place a trusted message", -5, scoring.cite(drama))
+    comments = [x.get("text") or "" for x in c.get("comment_sample") or []]
+    rough = [t for t in comments if SWEAR.search(t)]
+    if len(comments) >= 20 and len(rough) / len(comments) >= 0.08:
+        mark("-", f"Rough tone in the comments: {len(rough)} of {len(comments)} sampled comments swear", -5, quotes=[t[:120] for t in rough[:2]])
     for name in profile.get("competitors") or []:
         if len(name) < 3:
             continue
         pattern = re.compile(r"(?<!\w)#?" + re.escape(name.lower()).replace(r"\ ", r"\s?") + r"(?!\w)", re.I)
         hits = _posts_matching(c, pattern)
-        if hits or pattern.search(c.get("bio") or ""):
+        if hits or pattern.search(bio):
             sponsored = [p for p in hits if audience_mod.DISCLOSURE.search(f"{p.get('title') or ''} {p.get('desc') or ''}")]
             competitor = competitor or bool(sponsored)
-            brand -= 25 if sponsored else 10
-            ev.append(scoring.evidence_item("brand", "-", f"{'Sponsored by' if sponsored else 'Mentions'} {name}, a competitor",
-                                            scoring.cite(sponsored or hits), pts="-25" if sponsored else "-10"))
+            mark("-", f"{'Sponsored by' if sponsored else 'Mentions'} {name}, a competitor", -25 if sponsored else -10, scoring.cite(sponsored or hits))
     brand_name = (company.get("name") or "").lower()
     if len(brand_name) >= 4:
         own = _posts_matching(c, re.compile(r"(?<!\w)#?" + re.escape(brand_name) + r"(?!\w)", re.I))
         if own:
-            brand += 10
-            ev.append(scoring.evidence_item("brand", "+", f"Has mentioned {company['name']} before", scoring.cite(own), pts="+10"))
+            mark("+", f"Has mentioned {company['name']} before", 10, scoring.cite(own))
+    deals, names = [], set()
+    for p in looked:  # a brand named right by an ad disclosure ("Yhteistyössä @Turtle Beach"), not just any mention
+        post = f"{p.get('title') or ''} {p.get('desc') or ''}"
+        near = {b.group(0).title() for d in audience_mod.DISCLOSURE.finditer(post)
+                for b in TECH_BRANDS.finditer(post[max(0, d.start() - 80): d.end() + 80])}
+        if near:
+            deals.append(p)
+            names |= near
+    if deals:
+        names = sorted(names)
+        mark("+", f"Has worked with gaming or tech brands ({', '.join(names[:3])}): used to carrying a hardware message", 10, scoring.cite(deals))
+    wanted_values = f"{profile.get('values') or ''} {profile.get('target_customer') or ''}"
+    gain = 10
+    for label, trigger, shows in VALUE_THEMES:
+        if not trigger.search(wanted_values):
+            continue
+        hits = _posts_matching(c, shows)
+        if hits:
+            mark("+", f"Matches your value \"{label}\" in {len(hits)} of their last {len(looked)} posts", gain, scoring.cite(hits), fact=False)
+            gain = 5  # a second value shown counts less than the first
+        else:
+            mark("?", f"Nothing about your value \"{label}\" in their last {len(looked)} posts", fact=False)
+    if looked and not any(e["dim"] == "brand" and e["sign"] == "-" for e in ev):
+        mark("+", f"No gambling, adult content, crypto or competitor mentions in their last {len(looked)} posts" + (" or bio" if bio else ""), 5)
+    elif not looked:
+        mark("?", "No recent posts to check their tone or for gambling, adult content or competitors")
     if brand > safety + 10:
         ev.append(scoring.evidence_item("brand", "?", f"Brand fit can't be above safety + 10 while there are safety concerns: counted as {max(0, safety + 10)}",
                                         pts=f"max {max(0, safety + 10)}"))
-    brand = max(0, min(100, min(brand, safety + 10)))
-    checked_posts = len(c.get("recent_posts") or [])
-    if checked_posts and not any(e["dim"] == "brand" and e["sign"] == "-" for e in ev):
-        ev.append(scoring.evidence_item("brand", "+", f"No gambling, adult content or competitor mentions in their last {checked_posts} posts"
-                                        + (f" or bio" if c.get("bio") else "")))
-    elif not checked_posts:
-        ev.append(scoring.evidence_item("brand", "?", "No recent posts to check for gambling, adult content or competitors"))
+        brand = safety + 10
+    if brand > 90:  # rules can't be sure; the AI may confirm higher
+        ev.append(scoring.evidence_item("brand", "?", "A quick check counts at most 90 here: the AI can confirm higher after reading their posts",
+                                        fact=False, pts="max 90"))
+        brand = 90
+    brand = max(0, brand)
 
     # Readiness & cost: can we reach them, will a sponsored post fit, and can we afford them?
     readiness = scoring.QUICK_START["readiness"]

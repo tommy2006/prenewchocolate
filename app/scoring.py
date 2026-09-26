@@ -32,7 +32,7 @@ GOALS = {
 }
 
 
-VERSION = 6  # bump when scores are computed differently, so saved matches are re-scored on start
+VERSION = 8  # bump when scores are computed differently, so saved matches are re-scored on start
 UNPROVEN_MAX = 70  # a fit part with nothing cited behind it can't count as strong
 
 
@@ -140,7 +140,7 @@ def evidence_item(dim: str, sign: str, text: str, posts: list[dict] | None = Non
 
 
 # Where each quick (rules) score starts before the evidence moves it. Market is set outright by where they are.
-QUICK_START = {"content": 20, "audience": 55, "brand": 75, "readiness": 50}
+QUICK_START = {"content": 20, "audience": 55, "brand": 60, "readiness": 50}
 
 
 NEUTRAL_BASIS = {
