@@ -989,10 +989,13 @@ html[data-ui="modern"] body { font-family: "Plus Jakarta Sans", "Inter", system-
 
 /* Top bar */
 html[data-ui="modern"] .topbar { background: var(--glass); backdrop-filter: blur(10px); border-bottom-color: var(--line); }
-/* Modern: no "S" mark, just the word mark "prenew scout", all lowercase */
+/* Modern: no "S" mark, just the word mark "prenew" stacked over "scout", all lowercase */
 html[data-ui="modern"] .brand-mark { display: none; }
-html[data-ui="modern"] .brand-name { font-weight: 800; font-size: 22px; letter-spacing: -.03em; text-transform: lowercase; white-space: nowrap; }
-html[data-ui="modern"] .brand-co { display: inline; }
+html[data-ui="modern"] .brand-name {
+  display: inline-flex; flex-direction: column; font-weight: 800; font-size: 21px; line-height: .98; letter-spacing: -.03em;
+  text-transform: lowercase; white-space: nowrap;
+}
+html[data-ui="modern"] .brand-co { display: block; }
 html[data-ui="modern"] .tab { border-radius: 999px; padding: 8px 14px; }
 html[data-ui="modern"] .company-btn, html[data-ui="modern"] .icon-btn { border-radius: 999px; }
 html[data-ui="modern"] .count { background: var(--accent); color: #fff; }
@@ -1129,10 +1132,10 @@ html[data-ui="modern"] .field textarea, html[data-ui="modern"] .field input[type
   html[data-ui="modern"] .s-title h2 { font-size: 22px; }
   html[data-ui="modern"] .tab { padding: 6px 9px; }
   html[data-ui="modern"] .company-btn { padding: 5px 9px; }
-  html[data-ui="modern"] .brand-name { display: inline; font-size: 17px; }
+  html[data-ui="modern"] .brand-name { display: inline-flex; font-size: 17px; }
   .ui-switch { display: none; }
 }
-/* Phones: "prenew scout" needs room, so the Discover / Shortlist tabs move to a second row */
+/* Phones: the word mark, tabs, company and settings do not fit in one row, so the tabs move to a second row */
 @media (max-width: 560px) {
   html[data-ui="modern"] .topbar-inner { flex-wrap: wrap; height: auto; padding: 10px 12px 8px; row-gap: 8px; }
   html[data-ui="modern"] .tabs { order: 5; width: 100%; }
