@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scout · Creator discovery</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#" data-act="go-discover" aria-label="Scout home">
+        <span class="brand-mark">S</span><span class="brand-name">SCOUT</span>
+      </a>
+      <nav class="tabs" aria-label="Main">
+        <button class="tab on" data-view="discover">Discover</button>
+        <button class="tab" data-view="shortlist">Shortlist <span class="count" id="shortlist-count">0</span></button>
+      </nav>
+      <div class="company-menu">
+        <button class="company-btn" id="company-btn" aria-haspopup="true" aria-expanded="false">
+          <span class="company-dot" id="company-dot">P</span>
+          <span id="company-name">Company</span>
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div class="menu" id="company-list" hidden></div>
+      </div>
+      <button class="icon-btn" data-act="settings" aria-label="Settings" title="Settings: AI and API keys">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="setup-warning" id="setup-warning" hidden></div>
+
+  <main class="page" id="view-discover">
+    <section class="searchbox">
+      <div class="search-row">
+        <label class="search">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="q" type="search" autocomplete="off" placeholder="Search: “budget PC”, “CS2”, “Helsinki”…" aria-label="Search creators">
+          <kbd>/</kbd>
+        </label>
+        <button class="btn primary big" data-act="find" id="find-btn">
+          <svg class="ico" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.6 5.6 1.9-5.6 1.9L12 17l-1.9-5.6L4.5 9.5l5.6-1.9zM19 15l.9 2.1 2.1.9-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>
+          Find new creators
+        </button>
+      </div>
+
+      <div class="suggest-strip" id="suggest-strip">
+        <div class="suggest-head">
+          <span>💡 <b>Not sure what to search?</b> Pick a ready-made search, then press <i>Find new creators</i>.</span>
+          <button class="btn link" data-act="hide-suggestions">Hide</button>
+        </div>
+        <div class="suggest-cards" id="suggest-cards"></div>
+      </div>
+      <button class="btn link show-suggest" data-act="show-suggestions" id="show-suggest" hidden>💡 Show suggested searches</button>
+
+      <div class="crit">
+        <span class="crit-label">Creator type</span>
+        <div class="crit-body" id="c-tags"></div>
+      </div>
+      <div class="crit" id="crit-markets">
+        <span class="crit-label">Market</span>
+        <div class="crit-body" id="c-markets"></div>
+      </div>
+      <div class="crit">
+        <span class="crit-label">Platform</span>
+        <div class="crit-body"><div class="chips" id="f-platforms"></div></div>
+      </div>
+      <div class="crit">
+        <span class="crit-label">Size</span>
+        <div class="crit-body size-body">
+          <div class="size-slider">
+            <div class="range">
+              <div class="range-track"><i id="range-fill"></i></div>
+              <input type="range" id="size-lo" min="0" max="12" step="1" value="0" aria-label="Minimum followers">
+              <input type="range" id="size-hi" min="0" max="12" step="1" value="12" aria-label="Maximum followers">
+            </div>
+            <div class="range-scale"><span>0</span><span>10k</span><span>100k</span><span>1M</span><span>∞</span></div>
+          </div>
+          <b class="size-label" id="size-label">Any size</b>
+          <div class="chips" id="f-sizes"></div>
+        </div>
+      </div>
+
+      <div class="crit-foot">
+        <button class="chip ghost" id="toggle-advanced" aria-expanded="false">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>
+          More options <span class="count" id="adv-count" hidden></span>
+        </button>
+        <label class="sort">Sort
+          <select id="f-sort">
+            <option value="match">Best match</option>
+            <option value="gems">Hidden gems first</option>
+            <option value="views">Most views</option>
+            <option value="trend">Growing fastest</option>
+            <option value="engagement">Highest engagement</option>
+            <option value="followers_asc">Smallest first</option>
+            <option value="followers_desc">Biggest first</option>
+            <option value="newest">Recently added</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="advanced" id="advanced" hidden>
+        <div class="adv-group">
+          <h5>For new searches</h5>
+          <div class="adv-field">
+            <span class="adv-label">Collaboration you offer</span>
+            <div class="chips" id="c-deals"></div>
+          </div>
+          <div class="adv-field">
+            <span class="adv-label">Avoid</span>
+            <div class="chip-input" id="c-avoid"></div>
+          </div>
+          <div class="adv-field">
+            <span class="adv-label">Creators you already like</span>
+            <div class="chip-input" id="c-examples"></div>
+          </div>
+          <label class="check"><input type="checkbox" id="c-scout"> <span>Also let the AI search the open web (forums, local lists, press). Slower.<span class="muted" id="c-scout-note"></span></span></label>
+        </div>
+        <div class="adv-group">
+          <h5>Filter results</h5>
+          <div class="adv-row">
+            <div class="adv-field">
+              <span class="adv-label">Language</span>
+              <select id="f-language"><option value="">Any language</option></select>
+            </div>
+            <div class="adv-field">
+              <span class="adv-label">Engagement</span>
+              <select id="f-min-eng">
+                <option value="0">Any</option>
+                <option value="50">At least typical for their size</option>
+                <option value="70">Strong (about 2× typical)</option>
+              </select>
+            </div>
+          </div>
+          <div class="adv-field">
+            <span class="adv-label">Minimum match <b id="min-score-val">0</b></span>
+            <input type="range" id="f-min-score" min="0" max="95" step="5" value="0">
+          </div>
+          <div class="adv-field toggles">
+            <label class="check"><input type="checkbox" id="f-has-email"> Has contact email</label>
+            <label class="check"><input type="checkbox" id="f-gems"> Hidden gems only</label>
+            <label class="check"><input type="checkbox" id="f-hidden"> Show hidden creators</label>
+            <button class="btn link" data-act="reset-filters" style="align-self:flex-start">Reset filters</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="job" class="job" hidden></section>
+
+    <div class="results-head">
+      <span id="results-count"></span>
+    </div>
+    <section class="grid" id="grid" aria-live="polite"></section>
+    <nav class="pager" id="pager" aria-label="Pages"></nav>
+  </main>
+
+  <main class="page" id="view-shortlist" hidden>
+    <div class="shortlist-head">
+      <div>
+        <h1>Shortlist</h1>
+        <p class="muted">Your outreach list. Change a status as you go, then export to your CRM or a spreadsheet.</p>
+      </div>
+      <a class="btn" id="export-csv" href="#" download>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>
+        Download Excel
+      </a>
+    </div>
+    <div id="shortlist"></div>
+  </main>
+
+  <dialog id="detail" class="dlg dlg-wide" aria-label="Creator details"></dialog>
+  <dialog id="company" class="dlg" aria-labelledby="company-title"></dialog>
+  <dialog id="settings" class="dlg" aria-labelledby="settings-title"></dialog>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
