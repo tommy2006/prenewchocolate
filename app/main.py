@@ -2,6 +2,8 @@
 import asyncio
 import logging
 import re
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 from typing import Annotated
 
@@ -24,7 +26,16 @@ from .store import DEFAULT_PROFILE, DEFAULT_SEARCH, GOALS, new_id, now_iso, stor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-app = FastAPI(title="Scout")
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Repeating searches run in the background for as long as Scout runs (see watches below)."""
+    loop = asyncio.create_task(_watch_loop())
+    yield
+    loop.cancel()
+
+
+app = FastAPI(title="Scout", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 app.mount("/img", StaticFiles(directory=config.IMG_DIR), name="img")
 _tasks: dict[str, asyncio.Task] = {}  # job id -> the running search, so it can be stopped
@@ -1034,6 +1045,110 @@ async def export_tracker(company_id: str):
     name = re.sub(r"[^\w.-]+", "_", (company["partners"].get("file") or "tracker.xlsx").rsplit(".", 1)[0])
     return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="{name}_completed_by_Scout.xlsx"'})
+
+
+# --- Repeating searches ("watches"): a saved search that runs again every day or week ---------------------------
+
+WATCH_EVERY = {1: "every day", 7: "every week"}
+MAX_WATCHES = 3  # per company: each run spends YouTube quota (about 500 units per market)
+WATCH_CHECK_SECONDS = 600
+
+
+class WatchIn(JobIn):
+    every_days: int = 1
+
+
+def _watch_label(s: dict) -> str:
+    """"Finland, Estonia · YouTube + TikTok · Minecraft, Fortnite" for the list of repeating searches."""
+    parts = [", ".join(MARKETS[m]["name"] for m in s.get("markets", []) if m in MARKETS),
+             " + ".join(PLATFORMS.get(p, p) for p in (s.get("platforms") or SEARCH_PLATFORMS)),
+             ", ".join(s.get("tags") or []), f"“{s['focus']}”" if s.get("focus") else ""]
+    return " · ".join(p for p in parts if p)
+
+
+def _due(w: dict) -> bool:
+    last = datetime.fromisoformat(w.get("last_run_at") or w["created_at"])
+    return datetime.now(timezone.utc) - last >= timedelta(days=w["every_days"]) - timedelta(minutes=30)
+
+
+def _busy(company_id: str) -> bool:
+    return any(j["company_id"] == company_id and j["status"] in ("queued", "running") for j in store.jobs.values())
+
+
+def _run_watch(company: dict, w: dict) -> dict | None:
+    """Start the watch's search now (without changing what the search area shows). None if it can't run."""
+    body = JobIn(**w["search"])
+    sources = settings.source_status()
+    platforms = [p for p in (body.platforms or list(SEARCH_PLATFORMS)) if p in SEARCH_PLATFORMS and sources.get(p)]
+    markets = [m for m in body.markets if m in MARKETS]
+    if not platforms or not markets:
+        return None
+    job = _new_job(company["id"], platforms, markets, _size_range(company, body, platforms),
+                   focus=body.focus.strip(), tags=body.tags, deal_types=body.deal_types, avoid=body.avoid,
+                   example_creators=body.example_creators, ai_scout=False, watch_id=w["id"], auto=True)
+    w["last_run_at"], w["last_job_id"] = now_iso(), job["id"]
+    store.save()
+    _run(job["id"], run_job(job["id"]))
+    return job
+
+
+async def _watch_loop() -> None:
+    while True:
+        await asyncio.sleep(WATCH_CHECK_SECONDS)
+        try:
+            for company in list(store.companies.values()):
+                for w in company.get("watches", []):
+                    if w.get("active") and _due(w) and not _busy(company["id"]):
+                        _run_watch(company, w)
+                        break  # one search at a time per company
+        except Exception:
+            logging.getLogger("scout").exception("repeating searches failed")
+
+
+@app.get("/api/companies/{company_id}/watches")
+async def list_watches(company_id: str):
+    return [w for w in _company(company_id).get("watches", []) if w.get("active")]
+
+
+@app.post("/api/companies/{company_id}/watches")
+async def add_watch(company_id: str, body: WatchIn):
+    """Repeat this search every day or week; new creators it finds land in the list (and show as new)."""
+    company = _company(company_id)
+    if body.every_days not in WATCH_EVERY:
+        raise HTTPException(400, "Repeat every day (1) or every week (7)")
+    if not [m for m in body.markets if m in MARKETS]:
+        raise HTTPException(400, "Pick at least one market to search in")
+    watches = company.setdefault("watches", [])
+    if sum(1 for w in watches if w.get("active")) >= MAX_WATCHES:
+        raise HTTPException(400, f"At most {MAX_WATCHES} repeating searches: stop one first")
+    search = body.model_dump(exclude={"every_days"})
+    w = {"id": new_id("watch"), "search": search, "every_days": body.every_days, "label": _watch_label(search),
+         "every": WATCH_EVERY[body.every_days], "active": True, "created_at": now_iso(), "last_run_at": now_iso(),
+         "last_job_id": None}
+    watches.append(w)
+    store.save()
+    return w
+
+
+@app.delete("/api/companies/{company_id}/watches/{watch_id}")
+async def stop_watch(company_id: str, watch_id: str):
+    company = _company(company_id)
+    company["watches"] = [w for w in company.get("watches", []) if w["id"] != watch_id]
+    store.save()
+    return {"ok": True}
+
+
+@app.post("/api/companies/{company_id}/watches/{watch_id}/run")
+async def run_watch_now(company_id: str, watch_id: str):
+    company = _company(company_id)
+    w = next((w for w in company.get("watches", []) if w["id"] == watch_id and w.get("active")), None)
+    if not w:
+        raise HTTPException(404, "That repeating search doesn't exist anymore")
+    _one_at_a_time(company_id)
+    job = _run_watch(company, w)
+    if not job:
+        raise HTTPException(400, "None of this search's platforms or markets are available now")
+    return job
 
 
 class ForCreatorsIn(BaseModel):

@@ -881,11 +881,6 @@ async def refresh_numbers(job: dict, company: dict) -> None:
             for i in range(0, len(logins), 100):
                 for rec in await twitch.lookup_logins(http, logins[i:i + 100], ""):
                     fresh[rec["id"]] = rec
-        ig = [c["handle"].lstrip("@") for c in by_platform.get("instagram", []) if c.get("handle")]
-        if ig:
-            from .sources import instagram  # noqa: PLC0415 (only when there are Instagram creators)
-            for rec in await instagram.lookup_handles(http, ig, ""):
-                fresh[rec["id"]] = rec
         updated = []
         for cid, new in fresh.items():
             if cid in old:
