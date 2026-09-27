@@ -98,18 +98,34 @@ def ai_provider(data: dict | None = None) -> str:
     return "ollama"  # nothing chosen yet: the free local AI
 
 
+def _same_address(a: str, b: str) -> bool:
+    def norm(url: str) -> str:
+        return (url or "").strip().rstrip("/").removesuffix("/v1").rstrip("/").lower()
+    return norm(a) == norm(b)
+
+
 def ai_config(provider: str | None = None, overrides: dict | None = None, data: dict | None = None) -> dict:
-    """Everything needed to call the chosen AI. `overrides` are unsaved values from the Settings form."""
+    """Everything needed to call the chosen AI. `overrides` are unsaved values from the Settings form.
+
+    A saved key is only ever sent to the address it was saved with: a cloud AI's address can't be changed at all,
+    and trying a new address for your own server (Test, Load models) needs its key typed again."""
     data = load() if data is None else data
     provider = provider or ai_provider(data)
     p = PROVIDERS[provider]
     saved = _saved_provider(data, provider)
     overrides = {k: v for k, v in (overrides or {}).items() if v}
-    api_key = overrides.get("api_key") or saved.get("api_key") or (os.getenv(p["env"]) if p["env"] else "") or ""
+    editable = p.get("editable_url", False)
+    if not editable:
+        overrides.pop("base_url", None)
+    saved_url = ((saved.get("base_url") if editable else "")
+                 or (os.getenv(p["url_env"], "") if p.get("url_env") else "") or p.get("base_url", ""))
+    base_url = overrides.get("base_url") or saved_url
+    saved_key = saved.get("api_key") or (os.getenv(p["env"]) if p["env"] else "") or ""
+    withheld = bool(saved_key and not overrides.get("api_key") and overrides.get("base_url")
+                    and not _same_address(overrides["base_url"], saved_url))
+    api_key = overrides.get("api_key") or ("" if withheld else saved_key)
     model = overrides.get("model") or saved.get("model") or (
         os.getenv("CLAUDE_MODEL") if provider == "anthropic" else None) or p["default_model"]
-    base_url = (overrides.get("base_url") or saved.get("base_url")
-                or (os.getenv(p["url_env"], "") if p.get("url_env") else "") or p.get("base_url", ""))
     if p["kind"] == "ollama":  # older settings saved the OpenAI-compatible address
         base_url = base_url.rstrip("/").removesuffix("/v1")
     workspace_id = (overrides.get("workspace_id") or saved.get("workspace_id")
@@ -134,6 +150,7 @@ def ai_config(provider: str | None = None, overrides: dict | None = None, data: 
         "timeout": p.get("timeout", 240),
         "temperature": p.get("temperature"),
         "ready": bool(model) and (bool(api_key) or not p["needs_key"]) and (p["kind"] == "anthropic" or bool(base_url)),
+        "key_withheld": withheld,  # a new address was typed without its key, so the saved key wasn't used
     }
 
 
@@ -224,8 +241,14 @@ def public() -> dict:
     }
 
 
+class SettingsError(ValueError):
+    pass
+
+
 def update(changes: dict) -> None:
-    """Apply changes from the Settings form. Empty key fields mean "keep the saved key"."""
+    """Apply changes from the Settings form. Empty key fields mean "keep the saved key".
+    A new address for an AI that has a key needs the key typed again, so no one who can open Settings can
+    point the saved key (or the one in .env) at a server of their own."""
     data = load()
     if changes.get("ai_provider") in PROVIDERS:
         data["ai_provider"] = changes["ai_provider"]
@@ -234,14 +257,21 @@ def update(changes: dict) -> None:
     for key, values in (changes.get("providers") or {}).items():
         if key not in PROVIDERS:
             continue
+        before = ai_config(key, data=data)
         slot = data.setdefault("providers", {}).setdefault(key, {})
         for field in ("model", "base_url", "workspace_id"):
+            if field == "base_url" and not PROVIDERS[key].get("editable_url"):
+                continue  # a cloud AI's address is fixed
             if values.get(field) is not None:
                 slot[field] = values[field].strip()
         if values.get("api_key"):
             slot["api_key"] = values["api_key"].strip()
         if values.get("clear_key"):
             slot.pop("api_key", None)
+        after = ai_config(key, data=data)
+        if after["api_key"] and not values.get("api_key") and not _same_address(before["base_url"], after["base_url"]):
+            raise SettingsError(f"{PROVIDERS[key]['label']}: type the API key again for the new address. "
+                                "A saved key is only sent to the address it was saved with.")
     for name in DATA_KEYS:
         if changes.get(name):
             data[name] = changes[name].strip()

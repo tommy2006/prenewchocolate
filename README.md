@@ -169,6 +169,15 @@ Other options: `MODEL=org/name` for another Hugging Face model, `PORT=...`. The 
 
 Check everything from the command line with `.venv/Scripts/python scripts/check_keys.py`.
 
+### Sharing Scout with the team (Scout itself on a server)
+
+Put `SCOUT_PASSWORD=...` in the server's `.env` and restart Scout. Everyone then logs in once per browser (it stays
+logged in for 30 days; *Log out* is in the company menu). Changing the password logs everyone out. Without a password
+Scout only answers the computer it runs on (http://localhost), so a server can't be left open by mistake. Keys
+never leave the server: Settings shows only their last 4 characters, and a key is only ever sent to the address it
+was saved with (a cloud AI's address is fixed; a new address for your own GPU server needs its key typed again, to
+test or to save). Anyone logged in can still use the keys and change Settings, so give paid AI keys a spend limit.
+
 ## Cost and limits for one search (2 markets, YouTube + TikTok)
 
 - YouTube: about 1,000 of the 10,000 free daily quota units (4 searches of 100 units per market + cheap channel/video
@@ -202,6 +211,7 @@ Run a full Prenew search (Finland + Germany, all platforms) **before** the pitch
 
 ```
 app/main.py        HTTP API + serves the UI
+app/auth.py        the team password (SCOUT_PASSWORD) and login cookie; without one, only this computer is served
 app/pipeline.py    one discovery run: plan, source, filter, score
 app/llm.py         AI prompts (planning, scoring with cited evidence, deep evaluation, search bar, brand profile from a
                    website, pitch, tags, web scout); local models (Ollama), Claude SDK or any OpenAI-compatible API
@@ -217,6 +227,6 @@ app/linking.py     links one person's YouTube/TikTok/Instagram profiles (only wh
 app/partners.py    imports a collaboration tracker; flags past partners
 app/sources/       youtube.py (Data API), tiktok.py (own scraper) + websearch.py
 app/store.py       JSON-file database (data/db.json)
-static/            the UI (plain HTML/CSS/JS, no build step; settings.js is the Settings dialog)
+static/            the UI (plain HTML/CSS/JS, no build step; settings.js is the Settings dialog, login.html the login)
 scripts/dev_fixture.py   SAMPLE data for UI work without keys (data-dev/, never demo it)
 ```

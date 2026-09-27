@@ -7,11 +7,12 @@ from typing import Annotated
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audience, config, export as exporter, linking, llm, localai, partners, query, rules, scoring, settings, tracker
+from . import (audience, auth, config, export as exporter, linking, llm, localai, partners, query, rules, scoring,
+               settings, tracker)
 from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
 from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint, in_range
@@ -43,9 +44,72 @@ async def no_cache_ui(request: Request, call_next):
     if request.url.path == "/" or request.url.path.startswith("/static"):
         response.headers["Cache-Control"] = "no-store"
     elif request.url.path.startswith("/img/"):
-        # Image names are hashes of their source URL, so a file never changes: let the browser keep it.
-        response.headers["Cache-Control"] = "public, max-age=604800, immutable"
+        # Image names are hashes of their source URL, so a file never changes: let the browser keep it
+        # (only the browser: images are behind the login).
+        response.headers["Cache-Control"] = "private, max-age=604800, immutable"
     return response
+
+
+NO_STORE = {"Cache-Control": "no-store"}
+PUBLIC_PATHS = {"/api/login", "/api/logout", "/api/session"}
+NEEDS_PASSWORD = ("Scout needs a password before other computers can use it. On the server, add the line "
+                  "SCOUT_PASSWORD=your-password to Scout's .env file, then restart Scout.")
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    """With SCOUT_PASSWORD set, everything but the login and the UI's own code files needs a logged-in browser.
+    Without it, only this computer is served. (Added last, so it runs before the other middleware.)"""
+    path = request.url.path
+    if path.startswith("/static/") or path in PUBLIC_PATHS:
+        return await call_next(request)
+    if auth.enabled():
+        if auth.valid_session(request.cookies.get(auth.COOKIE)):
+            return await call_next(request)
+        if path.startswith("/api/"):
+            return JSONResponse({"detail": "Log in to Scout first"}, status_code=401, headers=NO_STORE)
+        if path.startswith("/img/"):
+            return Response(status_code=401, headers=NO_STORE)
+        return FileResponse(config.STATIC_DIR / "login.html", headers=NO_STORE)
+    if auth.is_local(request):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": NEEDS_PASSWORD}, status_code=403, headers=NO_STORE)
+    return HTMLResponse(f'<!doctype html><meta charset="utf-8"><title>Scout</title>'
+                        f'<p style="font: 16px system-ui; margin: 40px">{NEEDS_PASSWORD}</p>', status_code=403, headers=NO_STORE)
+
+
+class LoginIn(BaseModel):
+    password: str
+
+
+@app.post("/api/login")
+async def login(body: LoginIn, request: Request):
+    if not auth.enabled():
+        raise HTTPException(400, "This Scout has no password to log in with")
+    if not auth.check_password(body.password):
+        await asyncio.sleep(1)  # slows down guessing
+        raise HTTPException(401, "Wrong password")
+    response = JSONResponse({"ok": True})
+    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    response.set_cookie(auth.COOKIE, auth.new_session(), max_age=auth.MAX_AGE, path="/", httponly=True,
+                        samesite="lax", secure=https)
+    return response
+
+
+@app.post("/api/logout")
+async def logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(auth.COOKIE, path="/", httponly=True, samesite="lax")
+    return response
+
+
+@app.get("/api/session")
+async def session_state(request: Request):
+    """Whether this Scout has a password and this browser is logged in. `cookie_sent` tells an expired login
+    apart from a proxy that drops cookies."""
+    return {"auth": auth.enabled(), "logged_in": auth.valid_session(request.cookies.get(auth.COOKIE)),
+            "cookie_sent": auth.COOKIE in request.cookies}
 
 
 @app.exception_handler(llm.LLMError)
@@ -74,6 +138,7 @@ async def meta():
         "reject_reasons": REJECT_REASONS,
         "sources": settings.source_status(),
         "ai": _ai_summary(),
+        "auth": auth.enabled(),  # a password is set: the UI offers "Log out"
     }
 
 
@@ -1030,7 +1095,10 @@ async def put_settings(body: SettingsIn):
         raise HTTPException(400, "Unknown AI provider")
     changes = body.model_dump()
     changes["providers"] = {k: v.model_dump() for k, v in body.providers.items()}
-    settings.update(changes)
+    try:
+        settings.update(changes)
+    except settings.SettingsError as e:
+        raise HTTPException(400, str(e))
     llm.clear_overrides()  # a new key/model deserves a fresh try
     return settings.public()
 
@@ -1051,6 +1119,14 @@ def _ai_overrides(body: "TestIn") -> dict:
     return {"api_key": body.api_key, "model": body.model, "base_url": body.base_url, "workspace_id": body.workspace_id}
 
 
+def _key_hint(message: str, ai: dict) -> str:
+    """Explain a failure at a new address that the saved key wasn't sent to."""
+    if ai.get("key_withheld"):
+        return (f"{message.rstrip('. ')}. The saved key only goes to the address it was saved with: "
+                "type the key for this new address to test it.")
+    return message
+
+
 @app.post("/api/settings/test")
 async def test_settings(body: TestIn):
     """Test what's typed in the form (falling back to saved values), without saving it."""
@@ -1061,7 +1137,10 @@ async def test_settings(body: TestIn):
             ai = settings.ai_config(body.provider, _ai_overrides(body))
             if not ai["ready"]:
                 return {"ok": False, "message": "Download a model first" if ai["local"] else "Add an API key and a model first"}
-            return {"ok": True, "message": await llm.test_ai(ai)}
+            try:
+                return {"ok": True, "message": await llm.test_ai(ai)}
+            except llm.LLMError as e:
+                return {"ok": False, "message": _key_hint(str(e), ai)}
         if body.target == "youtube":
             return {"ok": True, "message": await check_youtube(body.youtube_api_key or settings.youtube_key())}
         if body.target == "twitch":
@@ -1131,6 +1210,6 @@ async def settings_models(body: TestIn):
     try:
         models = await llm.list_models(ai)
     except llm.LLMError as e:
-        return {"ok": False, "message": str(e), "models": []}
+        return {"ok": False, "message": _key_hint(str(e), ai), "models": []}
     return {"ok": True, "models": models, "current": ai["model"],
             "recommended": llm.recommend_model(body.provider, models, ai["model"])}

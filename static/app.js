@@ -12,6 +12,10 @@ async function api(path, { method = "GET", body } = {}) {
     headers: body && !raw ? { "Content-Type": "application/json" } : {},
     body: raw ? body : body ? JSON.stringify(body) : undefined,
   });
+  if (r.status === 401) {  // logged out (or the login expired): the page itself shows the login
+    location.assign("/");
+    throw new Error("Log in to Scout first");
+  }
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).detail || msg; } catch { /* not JSON */ }
@@ -237,7 +241,8 @@ function renderCompanyMenu() {
       <button data-company="${esc(c.id)}">${esc(c.name)}${c.id === S.company?.id ? '<span class="check-mark">✓</span>' : ""}</button>`).join("")
     + `<div class="sep"></div>
        <button data-act="edit-company">Brand profile: ${esc(S.company?.name || "")}</button>
-       <button data-act="new-company">+ Add a company</button>`;
+       <button data-act="new-company">+ Add a company</button>`
+    + (S.meta?.auth ? `<div class="sep"></div><button data-act="logout">Log out</button>` : "");
 }
 
 function toggleCompanyMenu(open) {
@@ -2017,6 +2022,7 @@ function bindEvents() {
     }
     else if (act === "new-company") { toggleCompanyMenu(false); openCompanyForm(null); }
     else if (act === "edit-company") { toggleCompanyMenu(false); openCompanyForm(S.company); }
+    else if (act === "logout") { await fetch("/api/logout", { method: "POST" }).catch(() => {}); location.assign("/"); }
     else if (act === "dismiss-job") { S.job = null; renderJob(); }
     else if (act === "stop-job") {
       actEl.disabled = true;

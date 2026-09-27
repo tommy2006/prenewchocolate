@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en" data-ui="modern">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scout · Log in</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login-page">
+  <form class="login-card" id="login-form">
+    <span class="brand-name"><span class="brand-co">prenew </span>scout</span>
+    <h1>Log in</h1>
+    <p class="hint">Enter your team's Scout password.</p>
+    <input type="text" name="username" value="Prenew Scout" autocomplete="username" hidden>
+    <label class="login-field">Password
+      <input type="password" id="password" name="password" autocomplete="current-password" required autofocus>
+    </label>
+    <button class="btn primary" type="submit" id="login-btn">Log in</button>
+    <p class="login-error" id="login-error" role="alert" hidden></p>
+  </form>
+  <script>
+    const form = document.getElementById("login-form");
+    const error = document.getElementById("login-error");
+    const button = document.getElementById("login-btn");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      button.disabled = true;
+      error.hidden = true;
+      try {
+        const r = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: document.getElementById("password").value }),
+        });
+        if (r.ok) return location.replace("/");
+        let message = "Wrong password";
+        try { message = (await r.json()).detail || message; } catch { /* not JSON */ }
+        error.textContent = message;
+      } catch {
+        error.textContent = "Can't reach Scout. Check your connection and try again.";
+      }
+      error.hidden = false;
+      button.disabled = false;
+      document.getElementById("password").select();
+    });
+  </script>
+</body>
+</html>
