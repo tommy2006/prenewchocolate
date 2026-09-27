@@ -221,6 +221,7 @@ function setCompany(company) {
   S.recent = null;
   S.undo = null;
   $("#q").value = "";
+  S.sentQuery = "";
   $("#understood").hidden = true;
   closeDetail();
   renderFilters();
@@ -473,18 +474,22 @@ function filtersChanged({ debounce = false } = {}) {
 // ---------- Search bar: plain words -> filters ----------
 const PARSE_KEYS = ["markets", "platforms", "tags", "follower_min", "follower_max", "language", "has_email", "gems", "growing"];
 
+// False if the text couldn't be read, so "Find new creators" doesn't search without it.
 async function runQuery(text) {
   text = text.trim();
   hideRecent();
   if (!text) {
     S.f.q = "";
+    S.sentQuery = "";
     $("#understood").hidden = true;
-    return filtersChanged();
+    await filtersChanged();
+    return true;
   }
   S.undo = JSON.parse(JSON.stringify(S.f));
   let r;
   try { r = await api(`/api/companies/${S.company.id}/parse-query`, { method: "POST", body: { q: text, ai: false } }); }
-  catch (err) { return toast(err.message, "err"); }
+  catch (err) { toast(err.message, "err"); return false; }
+  S.sentQuery = text;  // the filters now reflect this text (see startFind)
   applyParsed(r, text);
   // What the rules didn't understand: let the AI read it (a local model can take a few seconds).
   if (r.rest && S.meta.sources.ai) {
@@ -494,6 +499,7 @@ async function runQuery(text) {
       if ($("#q").value.trim() === text) applyParsed(ai, text);
     } catch { showUnderstood(r, text, false); }
   }
+  return true;
 }
 
 function applyParsed(r, text) {
@@ -554,6 +560,7 @@ function applyRecent(j) {
   S.f.follower_max = S.f.size_preset ? null : j.follower_max ?? null;
   S.f.q = j.focus || "";
   $("#q").value = S.f.q;
+  S.sentQuery = S.f.q;  // the filters already match this text
   $("#understood").hidden = true;
   hideRecent();
   renderFilters();
@@ -1384,6 +1391,14 @@ async function reloadCompany() {
 async function startFind() {
   const src = S.meta.sources;
   if (!src.ai) { openSettings(); return toast("First choose an AI in Settings", "err"); }
+  // Text typed but not sent with Enter would otherwise be ignored, and the search would run without it.
+  const typed = $("#q").value.trim();
+  if (typed !== (S.sentQuery || "")) {
+    $("#find-btn").disabled = true;
+    const ok = await runQuery(typed);
+    $("#find-btn").disabled = false;
+    if (!ok) return;
+  }
   if (!S.f.markets.length) {
     flagRow("#crit-markets");
     return toast("Pick at least one market to search in", "err");
@@ -1984,6 +1999,7 @@ function bindEvents() {
       S.f = S.undo;
       S.undo = null;
       $("#q").value = "";
+      S.sentQuery = "";
       $("#understood").hidden = true;
       renderFilters();
       searchChanged();
@@ -1993,6 +2009,7 @@ function bindEvents() {
       const keep = { deal_types: S.f.deal_types, avoid: S.f.avoid, example_creators: S.f.example_creators, ai_scout: S.f.ai_scout, sort: S.f.sort };
       S.f = { ...DEFAULT_FILTERS, ...keep };
       $("#q").value = "";
+      S.sentQuery = "";
       $("#understood").hidden = true;
       closePops();
       renderFilters();

@@ -427,6 +427,15 @@ def _size_text(search: dict) -> str:
     return f"{search.get('follower_min') or 0:,} to {f'{fmax:,}' if fmax else 'any'}"
 
 
+def _usual_types(company: dict) -> str:
+    """No creator type picked: aim at the brand's usual types and past partners. Asking for "what would sell
+    this brand" made a gaming-PC shop's searches return PC builders instead of the game creators it works with."""
+    usual = ", ".join(company.get("suggested_tags") or [])
+    return ("not specified: the brand's usual creator types" + (f" ({usual})" if usual else "")
+            + ", like the past collaborations below if there are any. What matters is that their viewers are the "
+              "brand's customers; creators who make content about what the brand sells are only one of these types")
+
+
 def brand_block(company: dict, search: dict, past_limit: int = 30) -> str:
     """The company (profile), what this search asks for, what worked before and what the team rejected."""
     markets = ", ".join(f"{MARKETS[m]['name']} ({m})" for m in search.get("markets", []) if m in MARKETS)
@@ -448,7 +457,7 @@ def brand_block(company: dict, search: dict, past_limit: int = 30) -> str:
     lines += [
         "</brand>",
         "<search>",
-        f"Creator types wanted: {', '.join(search.get('tags', [])) or 'not specified; infer what would sell this brand'}",
+        f"Creator types wanted: {', '.join(search.get('tags', [])) or _usual_types(company)}",
         f"Extra focus: {search.get('focus') or 'none'}",
         f"Target markets: {markets or 'n/a'}",
         f"Follower range: {_size_text(search)}",
@@ -496,6 +505,8 @@ PLAN_SYSTEM = """You plan social media searches that surface small, niche creato
 
 For each market, write searches the way local creators actually title and tag their own content: local language first (including slang and common local words), plus at most one English search when that niche is commonly discussed in English there. Make every search unmistakably local, because platform search is global: use words that only speakers of that language would write, and where natural add a local anchor (the country or a city in the local language, a local shop, prices in the local currency). A game or product name on its own returns creators from everywhere. Prefer specific sub-niches over broad terms, because broad terms only return huge accounts and brands. Never include the names of famous creators or of the brand itself.
 
+Search for the creators the brand's customers watch, spread over the creator types wanted. Search for content about the brand's own product (reviews, builds or unboxings of what it sells) only when such a type is among them, and then as one search among several.
+
 Hashtags: lowercase, no '#', no spaces. Return empty lists for platforms that are not requested."""
 
 PLAN_SCHEMA = _obj({
@@ -528,11 +539,17 @@ async def plan_searches(company: dict, search: dict, platforms: list[str]) -> li
     )
     data = await _json(PLAN_SYSTEM, user, PLAN_SCHEMA)
     keys = ("youtube_queries", "tiktok_queries", "tiktok_hashtags")
+    by_name = {MARKETS[m]["name"].lower(): m for m in markets if m in MARKETS}
     plans = []
     for m in data["markets"]:
-        if isinstance(m, dict) and m.get("market") in markets:
+        if not isinstance(m, dict):
+            continue
+        # Small models sometimes answer "Finland" or "fi" instead of "FI": map it back instead of losing the plan.
+        raw = str(m.get("market") or "").strip()
+        code = raw.upper() if raw.upper() in markets else by_name.get(raw.lower())
+        if code:
             # Keep only non-empty strings, so a sloppy reply can't break the scrapers.
-            plans.append({"market": m["market"], **{k: [str(q).strip().lstrip("#") for q in m.get(k) or [] if str(q).strip()] for k in keys}})
+            plans.append({"market": code, **{k: [str(q).strip().lstrip("#") for q in m.get(k) or [] if str(q).strip()] for k in keys}})
     return plans
 
 
@@ -543,8 +560,8 @@ DIMS = ["content", "audience", "market", "brand", "readiness"]
 SCORE_SYSTEM = """You are an influencer-marketing analyst. You judge, the way an experienced human marketer would, whether each creator is a good partner for one specific brand. Look past follower counts: who actually watches, whether those people would buy, and whether a sponsored post would feel natural. You value small creators whose audiences are genuinely engaged and relevant.
 
 Score each creator from 0 to 100 on:
-- content_fit: how closely their actual recent content matches the creator types and focus in the search (or, if none are given, what would sell this brand). 90+ = core niche, posts about it regularly. 60-80 = adjacent. Below 40 = unrelated.
-- audience_fit: how likely their viewers are the brand's customers: age (respect the brand's minimum audience age), interest in what the brand sells, buying power, trust in the creator (do viewers ask them for advice?). Use likely_audience_age (game age ratings and what commenters say about school, work or their age) and comments_asking_what_to_buy, and cite the comments that show it.
+- content_fit: how closely their actual recent content matches the creator types and focus in the search (or, if none are given, the brand's usual creator types listed there). 90+ = core niche, posts about it regularly. 60-80 = adjacent. Below 40 = unrelated.
+- audience_fit: how likely their viewers are the brand's customers: age (respect the brand's minimum audience age), interest in what the brand sells or what it's used for (for a gaming PC shop: gamers, not only hardware fans), buying power, trust in the creator (do viewers ask them for advice?). Use likely_audience_age (game age ratings and what commenters say about school, work or their age) and comments_asking_what_to_buy, and cite the comments that show it.
 - market_fit: how likely their audience is in the target markets, from post language, comment language, stated location and platform country. 90+ = clearly local. 50 = unclear. Below 30 = elsewhere.
 - brand_fit: whether their tone and values suit the brand and would make its message believable. Don't default to 75: start at 60 (nothing known either way) and move it for what the posts show. Raise it for posts that show the brand's own values (cite them), a clean tone, past deals with similar or respected brands, having mentioned the brand. Lower it for strong language, drama or pranks, crypto or trading content, a rough comment section, and anything on the brand's "never work with" list. 85+ only when several posts clearly show the brand's values; below 50 when tone or content clashes with them.
 - readiness: how ready they are for a collaboration: contact details, experience with sponsored posts or codes (but not so many ads that viewers tune out), posting regularly, a format where a sponsored segment fits naturally, and a likely price within the brand's budget.
@@ -706,7 +723,7 @@ def _evidence(c: dict, items: list, src: str) -> list[dict]:
 # (fit, audience, safety, competitors, a summary) and read only titles and bio. Stats and facts come from rules.
 LOCAL_SCORE_SYSTEM = """You judge whether social media creators fit one brand's influencer program. For each creator, from their bio and post titles only:
 - content_fit 0-100: how well their content matches the creator types wanted (90+ core niche, 60-80 adjacent, under 40 unrelated).
-- audience_fit 0-100: how likely their viewers are the brand's customers (old enough to buy, interested in what the brand sells).
+- audience_fit 0-100: how likely their viewers are the brand's customers (old enough to buy, interested in what the brand sells or what it's used for).
 - market_fit 0-100: how likely their audience is in the target markets, from the language of their posts and their country (90+ clearly local, 50 unclear, under 30 elsewhere).
 - brand_safety 0-100: 100 unless gambling, skin betting, adult content, hate or big controversy.
 - niche: 1-3 words. games: titles of the games they mainly cover (can be empty).

@@ -482,20 +482,23 @@ def check_limit(ai: dict) -> int:
 
 async def _plan(company: dict, search: dict, platforms: list[str], ai: dict) -> tuple[list[dict], str]:
     """Local-language search terms: remembered per search, else the AI writes them, else templates."""
-    key = json.dumps(["v2", sorted(search["markets"]), sorted(platforms), sorted(search.get("tags") or []),
+    # v3: v2 plans for searches without a creator type aimed at the brand's product (gaming PCs); don't reuse them.
+    key = json.dumps(["v3", sorted(search["markets"]), sorted(platforms), sorted(search.get("tags") or []),
                       (search.get("focus") or "").strip().lower()])
     cache = company.setdefault("plan_cache", {})
     if key in cache:
         return cache[key], "same as last time, no AI needed"
     if ai["ready"]:
         try:
-            plans = _blend(await asyncio.wait_for(llm.plan_searches(company, search, platforms), 240),
-                           rules.template_plan(company, search, platforms))
-            if plans:
+            ai_plans = await asyncio.wait_for(llm.plan_searches(company, search, platforms), 240)
+            # An answer without a single usable search isn't a plan: use the templates and ask again next time.
+            if any(p[k] for p in ai_plans for k in ("youtube_queries", "tiktok_queries", "tiktok_hashtags")):
+                plans = _blend(ai_plans, rules.template_plan(company, search, platforms))
                 cache[key] = plans
                 while len(cache) > 40:
                     cache.pop(next(iter(cache)))
                 return plans, f"written by {ai['label']}"
+            log.warning("AI plan had no usable searches, using templates")
         except Exception as e:
             log.warning("AI planning failed, using templates: %s", e)
     return rules.template_plan(company, search, platforms), "from templates"

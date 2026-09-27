@@ -299,9 +299,11 @@ def quick_score(c: dict, company: dict, search: dict) -> dict:
                                             quotes=comment_quotes(c, "adult"), pts="+5"))
     buyer_posts = [p for n in BUYER_NICHES for p in _posts_matching(c, _NICHE_RE[n])]
     if len(buyer_posts) >= 2:
-        audience += 15
+        # One buying signal among several. At +15 it outweighed matching the search, so a gaming-PC shop's results
+        # filled up with hardware channels instead of the game creators whose viewers buy the PCs.
+        audience += 8
         ev.append(scoring.evidence_item("audience", "+", "Talks about PC hardware and setups: viewers are shopping for gear",
-                                        scoring.cite(list({p.get("url"): p for p in buyer_posts}.values())), fact=False, pts="+15"))
+                                        scoring.cite(list({p.get("url"): p for p in buyer_posts}.values())), fact=False, pts="+8"))
     else:
         ev.append(scoring.evidence_item("audience", "?", "No PC hardware or setup posts: nothing shows their viewers are shopping for gear",
                                         fact=False, pts="+0"))
@@ -343,10 +345,13 @@ def quick_score(c: dict, company: dict, search: dict) -> dict:
             ev.append(scoring.evidence_item("market", "+", f"{share:.0%} of {a['detected']} sampled comments are in {names}",
                                             pts="min 85" if market < 85 else ""))
             market = max(market, 85)
-        elif share < 0.15 and top and top not in wanted_langs and top != "en":
+        elif share < 0.15 and top and top not in wanted_langs and (top != "en" or not c.get("country")):
+            # English comments are normal under local creators too, so they only count against a creator whose
+            # country is unknown: almost no local comments then means a global channel, below the market cut-off.
+            cap = 40 if top != "en" else 25
             ev.append(scoring.evidence_item("market", "-", f"Most sampled comments are in {LANGUAGES.get(top, top)}, not your markets' languages",
-                                            pts="max 40" if market > 40 else ""))
-            market = min(market, 40)
+                                            pts=f"max {cap}" if market > cap else ""))
+            market = min(market, cap)
 
     # Brand & safety: tone, values, risks, competitors. Starts neutral; what the posts show moves it.
     brand, safety, competitor = scoring.QUICK_START["brand"], 100, False
