@@ -13,8 +13,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (audience, auth, config, export as exporter, likeness, linking, llm, localai, partners, query, rules,
-               scoring, settings, tracker)
+from . import (audience, auth, config, export as exporter, likeness, linking, llm, localai, partners, planner, query,
+               rules, scoring, settings, tracker)
 from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
 from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint, content_format, in_range
@@ -835,6 +835,28 @@ PART_NAMES = {"content": "content", "audience": "audience", "market": "market", 
 
 
 _found_by_search = found_by_search
+
+
+class PlanIn(BaseModel):
+    budget: int = 5000  # EUR for the whole campaign
+    goal: str = ""  # sales | balanced | awareness; "" = the brand profile's goal
+    max_creators: int = 12
+    need_email: bool = False
+    min_fit: int = 55
+    new_only: bool = False  # leave out creators the company already worked with
+
+
+@app.post("/api/companies/{company_id}/plan")
+async def plan_campaign(company_id: str, f: Annotated[Filters, Depends()], body: PlanIn):
+    """The best mix of creators for a budget, from the list the grid shows (the same filters as the grid)."""
+    company = _company(company_id)
+    if body.budget < 50:
+        raise HTTPException(400, "Plan with a budget of at least €50")
+    goal = body.goal if body.goal in GOALS else scoring.goal_of(company)
+    idx = partners.index(company)
+    return planner.plan(_rows(company_id, f), store.creators, body.budget, goal, max(1, min(body.max_creators, 50)),
+                        body.need_email, max(0, min(body.min_fit, 100)), lambda c, m: bool(partners.find(idx, c, m)),
+                        body.new_only)
 
 
 @app.get("/api/companies/{company_id}/partner-profile")

@@ -1,0 +1,26 @@
+/* Campaign planner (static/planner.js): a dialog on top of the list. Uses the app's colour variables. */
+.planner .plan-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; align-items: end; }
+.planner .plan-form select, .planner .plan-form input[type=number] { width: 100%; }
+.planner .plan-checks .check { white-space: nowrap; }
+.planner .plan-checks { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; }
+.planner .plan-checks .btn { margin-left: auto; }
+.planner #plan-out { display: flex; flex-direction: column; gap: 12px; }
+.planner .plan-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.planner .plan-tiles > div { border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; background: var(--surface); }
+.planner .plan-tiles b { display: block; font-size: 20px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.planner .plan-tiles span { color: var(--muted); font-size: 12px; }
+.planner .plan-vs { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--good-bg); color: var(--good-ink); font-size: 13.5px; }
+.planner .plan-mix, .planner .plan-note { margin: 0; color: var(--muted); font-size: 12.5px; }
+.planner .plan-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.planner .plan-table th, .planner .plan-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.planner .plan-table th { font-size: 12px; color: var(--muted); font-weight: 600; }
+.planner .plan-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.planner .plan-table tbody tr { cursor: pointer; }
+.planner .plan-table tbody tr:hover { background: var(--sel); }
+.planner .plan-table .tag { margin-left: 6px; }
+.planner .plan-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+#plan-btn { white-space: nowrap; }
+@media (max-width: 640px) {
+  .planner .plan-form, .planner .plan-tiles { grid-template-columns: 1fr 1fr; }
+  .planner .c-hide-sm { display: none; }
+}
