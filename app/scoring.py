@@ -281,7 +281,7 @@ def fit_headline(m: dict) -> str:
     parts = m.get("fit_parts") or {}
     if m.get("competitor_sponsor"):
         return "Works with a competitor"
-    if (m.get("brand_safety") or 100) < 50:
+    if (m.get("brand_safety") if m.get("brand_safety") is not None else 100) < 50:  # 0 is a real score
         return "Brand-safety risk"
     if not parts:
         return fit_word(m.get("fit") or 0)

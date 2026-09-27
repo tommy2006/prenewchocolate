@@ -39,7 +39,7 @@ def plan(rows: list[tuple[dict, dict]], creators: dict[str, dict], budget: int, 
         if m.get("competitor_sponsor"):
             skipped["works with a competitor"] += 1
             continue
-        if (m.get("brand_safety") or 100) < 50:
+        if (m.get("brand_safety") if m.get("brand_safety") is not None else 100) < 50:  # 0 is a real score
             skipped["brand-safety risk"] += 1
             continue
         if new_only and is_partner and is_partner(c, m):

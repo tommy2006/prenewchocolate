@@ -1100,6 +1100,7 @@ async def export_tracker(company_id: str):
 
 WATCH_EVERY = {1: "every day", 7: "every week"}
 MAX_WATCHES = 3  # per company: each run spends YouTube quota (about 500 units per market)
+MAX_WATCH_MARKETS = 5
 WATCH_CHECK_SECONDS = 600
 
 
@@ -1165,8 +1166,11 @@ async def add_watch(company_id: str, body: WatchIn):
     company = _company(company_id)
     if body.every_days not in WATCH_EVERY:
         raise HTTPException(400, "Repeat every day (1) or every week (7)")
-    if not [m for m in body.markets if m in MARKETS]:
+    markets = [m for m in body.markets if m in MARKETS]
+    if not markets:
         raise HTTPException(400, "Pick at least one market to search in")
+    if len(markets) > MAX_WATCH_MARKETS:
+        raise HTTPException(400, f"A repeating search can cover up to {MAX_WATCH_MARKETS} markets: pick fewer")
     watches = company.setdefault("watches", [])
     if sum(1 for w in watches if w.get("active")) >= MAX_WATCHES:
         raise HTTPException(400, f"At most {MAX_WATCHES} repeating searches: stop one first")
