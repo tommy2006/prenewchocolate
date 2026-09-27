@@ -34,6 +34,16 @@ def norm(text) -> str:
     return re.sub(r"[^a-z0-9]", "", str(text or "").lower())
 
 
+# What a channel name adds that a tracker usually leaves out: "DerDanoTV", "KakkuhGaming", "TheMikko", "its_emma".
+_DECOR = re.compile(r"^(?:the|its|official)(?=[a-z0-9]{4})|(?<=[a-z0-9]{4})(?:tv|ttv|yt|gaming|games|official|live|plays)$")
+
+
+def bare(key: str) -> str:
+    """A normalized name without channel decorations: derdanotv -> derdano. Unchanged if nothing is left."""
+    out = _DECOR.sub("", key)
+    return out if len(out) >= 3 else key
+
+
 def _rows_xlsx(data: bytes) -> list[list]:
     from openpyxl import load_workbook
     try:
@@ -160,7 +170,14 @@ def _aliases(*names) -> list[str]:
 
 
 def index(company: dict) -> dict[str, dict]:
-    return {a: p for p in (company.get("partners") or {}).get("items", []) for a in p["aliases"]}
+    idx = {}
+    for p in (company.get("partners") or {}).get("items", []):
+        for a in p["aliases"]:
+            idx.setdefault(a, p)
+    for p in (company.get("partners") or {}).get("items", []):  # exact names first, then undecorated ones
+        for a in p["aliases"]:
+            idx.setdefault(bare(a), p)
+    return idx
 
 
 def find(idx: dict[str, dict], creator: dict, match: dict | None = None) -> dict | None:
@@ -169,7 +186,8 @@ def find(idx: dict[str, dict], creator: dict, match: dict | None = None) -> dict
         return None
     country = (match or {}).get("country") or creator.get("country") or ""
     markets = {country, *((match or {}).get("search_markets") or [])} - {""}
-    for key in (norm(creator.get("name")), norm(creator.get("handle"))):
+    keys = [norm(creator.get("name")), norm(creator.get("handle"))]
+    for key in [*keys, *(bare(k) for k in keys)]:
         p = idx.get(key)
         if p and (len(key) >= 6 or p["market"] in markets):
             return p

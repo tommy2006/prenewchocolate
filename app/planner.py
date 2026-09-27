@@ -6,7 +6,7 @@ depends on the campaign goal:
 - sales: the views of people likely to buy (audience fit, overall fit and authenticity weigh them);
 - balanced: its views weighed by the match score.
 Creators are picked by value per euro until the budget or the number of creators runs out, one profile per person,
-and never someone the team marked "not a fit". Prices and views are estimates from public numbers, so the plan is a
+and never someone the team marked "not a fit", who works with a competitor or is a brand-safety risk. Prices and views are estimates from public numbers, so the plan is a
 starting point to negotiate from, not a quote.
 """
 import re
@@ -35,6 +35,12 @@ def plan(rows: list[tuple[dict, dict]], creators: dict[str, dict], budget: int, 
     candidates, skipped = [], Counter()
     for c, m in rows:
         if m.get("status") in ("hidden", "declined"):
+            continue
+        if m.get("competitor_sponsor"):
+            skipped["works with a competitor"] += 1
+            continue
+        if (m.get("brand_safety") or 100) < 50:
+            skipped["brand-safety risk"] += 1
             continue
         if new_only and is_partner and is_partner(c, m):
             skipped["worked with you before"] += 1

@@ -113,7 +113,7 @@ def build_match(creator: dict, r: dict, job_id: str, markets: list[str] | None, 
 def rebuild(match: dict, creator: dict, company: dict, r: dict) -> dict:
     """A new match from new scores, keeping what the team did with the old one (status, pitch, feedback...)."""
     new = build_match(creator, r, match.get("job_id"), match.get("search_markets") or [], company)
-    for key in ("status", "pitch", "feedback", "created_at", "deep"):
+    for key in ("status", "status_at", "pitch", "feedback", "created_at", "deep"):
         if match.get(key) is not None:
             new[key] = match[key]
     return new

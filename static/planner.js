@@ -91,7 +91,7 @@
 
   function render(r) {
     if (!r.count) {
-      const why = Object.entries(r.left_out || {}).map(([k, n]) => `${n} with ${esc(k)}`).join(", ");
+      const why = Object.entries(r.left_out || {}).map(([k, n]) => `${n} ${esc(k)}`).join(", ");
       return `<div class="empty small"><h3>Nothing fits yet</h3><p>No creator in the list fits this budget and these choices${why ? ` (left out: ${why})` : ""}. Raise the budget, allow more creators, or widen the filters.</p></div>`;
     }
     const vs = r.single_best && r.views > r.single_best.views

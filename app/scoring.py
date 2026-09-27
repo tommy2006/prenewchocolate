@@ -221,7 +221,7 @@ def quality_notes(c: dict) -> dict:
     ppm, days = c.get("posts_per_month"), c.get("days_since_last_post")
     if ppm is not None and days is not None:
         sign = "+" if ppm >= 4 and days <= 14 else "-" if days > 30 or ppm < 2 else ""
-        notes["activity"] = (sign, f"Posts {ppm:g} times a month, last post {'today' if days == 0 else f'{days} days ago'}")
+        notes["activity"] = (sign, rhythm(ppm, days))
     else:
         notes["activity"] = ("", "Posting rhythm unknown")
     t = c.get("views_trend")
@@ -269,6 +269,12 @@ def _pair_words(good: list[str], bad: list[str], fallback: str) -> str:
     if good:
         return good[0] + (f", {good[1][:1].lower() + good[1][1:]}" if len(good) > 1 else "")
     return fallback
+
+
+def rhythm(ppm: float, days: int) -> str:
+    """"Posts about 6 times a month, last post yesterday", in plain words."""
+    often = "less than once a month" if ppm < 0.75 else "about once a month" if ppm < 1.5 else f"about {ppm:.0f} times a month"
+    return f"Posts {often}, last post {'today' if days == 0 else 'yesterday' if days == 1 else f'{days} days ago'}"
 
 
 def fit_headline(m: dict) -> str:

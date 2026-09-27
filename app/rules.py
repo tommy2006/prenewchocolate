@@ -474,8 +474,7 @@ def quick_score(c: dict, company: dict, search: dict) -> dict:
     if days is not None and days > 60:
         ready("-", f"Quiet lately: last post {days} days ago", -20)
     elif ppm is not None and days is not None:
-        often = "less than once a month" if ppm < 0.75 else "about once a month" if ppm < 1.5 else f"about {ppm:.0f} times a month"
-        rhythm = f"Posts {often}, last post {'today' if days == 0 else 'yesterday' if days == 1 else f'{days} days ago'}"
+        rhythm = scoring.rhythm(ppm, days)
         if ppm >= 4 and days <= 14:
             ready("+", rhythm + ": easy to fit a sponsored post into their schedule", 10)
         elif ppm < 2:
