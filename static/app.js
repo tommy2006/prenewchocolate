@@ -553,7 +553,9 @@ async function runQuery(text) {
 function applyParsed(r, text) {
   const f = r.filters;
   const base = S.undo || S.f;
-  S.f = { ...S.f, markets: base.markets, platforms: base.platforms, tags: base.tags };
+  // The words decide the topic and the platform: a tag or platform left over from the saved filters would
+  // otherwise quietly narrow the results past what "Searching for …" says. Markets and size stay as saved.
+  S.f = { ...S.f, markets: base.markets, platforms: [], tags: [] };
   if (f.markets) S.f.markets = f.markets;
   if (f.platforms) S.f.platforms = f.platforms.length === Object.keys(S.meta.search_platforms).length ? [] : f.platforms;
   if (f.tags) S.f.tags = f.tags;
