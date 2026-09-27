@@ -17,9 +17,9 @@ from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
 from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint, content_format, in_range
 from .sources import twitch, youtube
-from .pipeline import (LINKED_LABEL, check_limit, draft_pitches, fetch_linked, find_contacts, merge_ai, rebuild,
-                       refresh_numbers, rescore_company, retry_scoring, run_job, run_task, run_tracker, search_of,
-                       upgrade_library)
+from .pipeline import (LINKED_LABEL, check_limit, draft_pitches, fetch_linked, find_contacts, found_by_search, merge_ai,
+                       rebuild, refresh_numbers, rescore_company, retry_scoring, run_job, run_task, run_tracker,
+                       search_of, upgrade_library)
 from .store import DEFAULT_PROFILE, DEFAULT_SEARCH, GOALS, new_id, now_iso, store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -812,9 +812,7 @@ PART_NAMES = {"content": "content", "audience": "audience", "market": "market", 
               "readiness": "readiness & cost"}
 
 
-def _found_by_search(c: dict) -> bool:
-    """Found by one of Scout's own searches, not only looked up from the tracker (or linked from such a profile)."""
-    return any(not v.startswith(tracker.LABEL) and v != LINKED_LABEL for v in c.get("found_via", []))
+_found_by_search = found_by_search
 
 
 @app.get("/api/companies/{company_id}/recall")

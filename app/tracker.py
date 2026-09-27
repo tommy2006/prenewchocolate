@@ -18,7 +18,9 @@ log = logging.getLogger("scout")
 LABEL = "Your collaboration tracker"  # found_via for profiles found this way (not by Scout's own searches)
 MAX_GUESSES = 5
 SIZE_RATIO = 3.0  # followers may have grown or shrunk since: accept a third to three times the tracker's number
-MIN_UNIQUE = 6  # without numbers to compare, a handle needs at least this many letters to be trusted
+MIN_UNIQUE = 6  # without numbers to compare, a handle needs at least this many letters to be trusted...
+DISTINCTIVE = 9  # ...and, unless it's this long ("kromkachleba"), a sign that the profile is in the right market
+                 # ("hunter" or "gato" are words: a random account with that name isn't the partner)
 
 
 def handle_guesses(p: dict) -> list[str]:
@@ -63,12 +65,27 @@ def plausible(p: dict, platform: str, handle: str, followers: int | None) -> tup
 
 
 def _outside(c: dict, market: str) -> bool:
-    """Clearly based in another market (only used when we couldn't check the size)."""
+    """Clearly based in another market: a US musician with the right follower count isn't a German partner."""
     if not market or market not in MARKETS:
         return False
     langs = set(MARKETS[market]["languages"])
     country, lang = c.get("country") or "", c.get("language") or ""
     return bool((country and country != market) or (lang and lang != "en" and lang not in langs))
+
+
+def _local(c: dict, market: str) -> bool:
+    """Positive sign that the profile is in the tracker's market: its country, or posts in a local language."""
+    if not market or market not in MARKETS:
+        return True
+    langs = set(MARKETS[market]["languages"]) - {"en"}
+    return c.get("country") == market or (c.get("language") or "") in langs
+
+
+def _accept(found: dict, p: dict, handle: str, sure: bool) -> bool:
+    market = p.get("market", "")
+    if _outside(found, market):
+        return False
+    return sure or len(partners.norm(handle)) >= DISTINCTIVE or _local(found, market)
 
 
 async def _youtube(http, p: dict, guesses: list[str]) -> tuple[dict | None, bool, str]:
@@ -80,7 +97,7 @@ async def _youtube(http, p: dict, guesses: list[str]) -> tuple[dict | None, bool
         if not ok:
             continue
         found = await youtube.build(http, [channel], {channel["id"]: f"{LABEL}: {p['name']}"})
-        if found and (sure or not _outside(found[0], p.get("market", ""))):
+        if found and _accept(found[0], p, g, sure):
             return found[0], sure, g
     return None, False, ""
 
@@ -94,7 +111,7 @@ async def _tiktok(http, p: dict, guesses: list[str]) -> tuple[dict | None, bool,
         if not ok:
             continue
         found = await tiktok.complete(http, [quick], f"{LABEL}: {p['name']}")
-        if found and (sure or not _outside(found[0], p.get("market", ""))):
+        if found and _accept(found[0], p, g, sure):
             return found[0], sure, g
     return None, False, ""
 
@@ -103,7 +120,7 @@ async def _twitch(http, p: dict, guesses: list[str]) -> tuple[dict | None, bool,
     found = {c["handle"]: c for c in await twitch.lookup_logins(http, guesses, f"{LABEL}: {p['name']}")}
     for g in guesses:  # the tracker has no Twitch numbers: only distinctive names in the right market count
         c = found.get(g)
-        if c and plausible(p, "twitch", g, c.get("followers"))[0] and not _outside(c, p.get("market", "")):
+        if c and plausible(p, "twitch", g, c.get("followers"))[0] and _accept(c, p, g, False):
             return c, False, g
     return None, False, ""
 

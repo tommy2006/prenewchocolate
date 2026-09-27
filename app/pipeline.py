@@ -342,6 +342,13 @@ async def run_tracker(job_id: str) -> None:
             found = list({c["id"]: c for r in results.values() for c in r["profiles"]}.values())
             for c in found:
                 metrics.compute(c)
+            # A new lookup replaces the last one: profiles only an earlier (looser) lookup matched leave the list.
+            earlier = ((company.get("partners") or {}).get("lookup") or {}).get("results") or {}
+            confirmed = {c["id"] for c in found}
+            matches = store.matches.setdefault(company["id"], {})
+            for cid in {i for r in earlier.values() for i in r.get("ids", [])} - confirmed:
+                if cid in store.creators and not found_by_search(store.creators[cid]):
+                    matches.pop(cid, None)
             counts = {k: sum(1 for r in results.values() if r["status"] == k) for k in ("found", "twitch")}
             detail = f"found {counts['found']} of {len(items)}"
             if counts["twitch"]:
@@ -418,6 +425,11 @@ async def _comments_step(http, job: dict, pool: list[dict]) -> None:
     await asyncio.gather(*(one(c) for c in yt))
     n = sum(1 for c in yt if c.get("comment_sample"))
     _step(job, "comments", label, "done", f"comments sampled for {n} of {len(yt)} YouTube creators")
+
+
+def found_by_search(c: dict) -> bool:
+    """Found by one of Scout's own searches, not only looked up from the tracker (or linked from such a profile)."""
+    return any(not v.startswith(tracker.LABEL) and v != LINKED_LABEL for v in c.get("found_via", []))
 
 
 def _stopped(job: dict) -> None:
@@ -703,6 +715,8 @@ def rescore_one(company: dict, cid: str) -> None:
     if not c or not m or "fit_parts" not in m:
         return
     quick = rules.quick_score(c, company, search_of(m))
+    if m.get("ai_checked") and not any(m["fit_parts"].values()):
+        m = {**m, "ai_checked": False, "checked": "rules"}  # an all-zero answer was a model failure, not a judgement
     if not m.get("ai_checked"):  # rules only: cheap to redo, and budget or competitors may have changed
         store.matches[company["id"]][cid] = rebuild(m, c, company, quick)
         return

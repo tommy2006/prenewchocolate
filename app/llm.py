@@ -773,6 +773,13 @@ def _local_why(c: dict, reasons: list) -> list[dict]:
     return out[:2]
 
 
+def _empty(r: dict) -> bool:
+    """A model that can't judge a creator sometimes answers 0 for every part ("No recent data available"):
+    that's no answer, and it mustn't sink a creator the rules scored fine."""
+    values = [r.get(k) for k in ("content_fit", "audience_fit", "market_fit", "brand_fit", "readiness") if k in r]
+    return bool(values) and not any(values)
+
+
 async def score_batch(company: dict, search: dict, creators: list[dict], ai: dict | None = None) -> dict[str, dict]:
     ai = ai or settings.ai_config()
     by_id = {c["id"]: c for c in creators}
@@ -782,7 +789,7 @@ async def score_batch(company: dict, search: dict, creators: list[dict], ai: dic
         data = await _json(system, user, LOCAL_SCORE_SCHEMA, ai=ai, max_tokens=170 * len(creators) + 100)
         out = {}
         for r in data["results"]:
-            if isinstance(r, dict) and r.get("id") in by_id:
+            if isinstance(r, dict) and r.get("id") in by_id and not _empty(r):
                 r["evidence"] = _local_why(by_id[r["id"]], r.pop("why", []))
                 r["red_flags"] = []
                 out[r["id"]] = r
@@ -792,7 +799,7 @@ async def score_batch(company: dict, search: dict, creators: list[dict], ai: dic
     data = await _json(system, user, SCORE_SCHEMA, ai=ai, max_tokens=900 * len(creators) + 300)
     out = {}
     for r in data["results"]:
-        if isinstance(r, dict) and r.get("id") in by_id:
+        if isinstance(r, dict) and r.get("id") in by_id and not _empty(r):
             r["evidence"] = _evidence(by_id[r["id"]], r.get("evidence"), "ai")
             out[r["id"]] = r
     return out
@@ -830,6 +837,8 @@ async def deep_evaluate(company: dict, search: dict, c: dict) -> dict:
             + json.dumps(_compact(c, n_posts=8 if local else 12, n_comments=12 if local else 30, desc_len=150 if local else 300),
                          ensure_ascii=False))
     data = await _json(DEEP_SYSTEM, user, DEEP_SCHEMA, ai=ai, max_tokens=4000)
+    if _empty(data):
+        raise LLMError("The AI couldn't judge this creator (it answered 0 for everything). Try again, or pick a stronger writing AI in Settings.")
     data["evidence"] = _evidence(c, data.get("evidence"), "ai")
     data["ai_checked"] = "deep"
     data["model"] = f"{ai['label']} · {active_model(ai)}"
