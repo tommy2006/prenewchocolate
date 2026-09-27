@@ -50,7 +50,6 @@ DEFAULT_SEARCH = {
     "deal_types": [],
     "avoid": [],
     "example_creators": [],
-    "ai_scout": False,
     "size_preset": "",  # "usual" = the company's usual creator size per platform (brand profile)
 }
 PRENEW["search"] = {
@@ -103,10 +102,8 @@ def _migrate_company(co: dict) -> None:
     co.pop("suggesting", None)
     for key in ("follower_min", "follower_max"):
         co["search"].setdefault(key, None)
-    if co.get("scout_off") is None:
-        # The web scout runs paid Claude web searches; it's opt-in per search now, never left on by default.
-        co["search"]["ai_scout"] = False
-        co["scout_off"] = True
+    co["search"].pop("ai_scout", None)  # the AI web scout is gone
+    co.pop("scout_off", None)
     co["profile"] = {**DEFAULT_PROFILE, **(co.get("profile") or {})}
     if co.get("id") == PRENEW["id"] and co.get("seed_version", 1) < PRENEW["seed_version"]:
         if co.get("seed_version", 1) < 2:

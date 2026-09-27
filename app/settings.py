@@ -2,8 +2,8 @@
 
 Two AI roles, so the expensive one is only used when it's worth it:
 - the search AI plans searches and scores every creator (many calls): a free local model by default;
-- the writing AI drafts outreach messages and runs the optional web scout, only when the user clicks
-  (for example Claude). If none is set, the search AI does that too.
+- the writing AI drafts outreach messages and deep evaluations, only when the user clicks (for example a
+  stronger cloud model). If none is set, the search AI does that too.
 
 Saved to data/settings.json on this computer. Values in .env are used as a fallback, so either works.
 """
@@ -14,8 +14,8 @@ from .config import DATA_DIR
 
 PATH = DATA_DIR / "settings.json"
 
-# kind "anthropic" uses the Anthropic SDK; kind "openai" speaks the OpenAI-compatible
-# chat-completions API, which OpenAI, Gemini, OpenRouter, Ollama and most others offer.
+# kind "ollama" is a local model through Ollama's own API; kind "openai" speaks the OpenAI-compatible
+# chat-completions API, which your own GPU server (vLLM), OpenAI, Gemini, OpenRouter and most others offer.
 PROVIDERS = {
     "ollama": {
         "label": "Local AI", "company": "free, runs on this computer (Ollama)", "kind": "ollama", "env": "",
@@ -23,13 +23,6 @@ PROVIDERS = {
         "key_url": "https://ollama.com/download", "needs_key": False, "editable_url": True, "local": True,
         # Small models on a laptop CPU: few creators per request, one request at a time.
         "max_tokens": 4096, "batch_size": 5,
-    },
-    "anthropic": {
-        "label": "Claude", "company": "Anthropic", "kind": "anthropic", "env": "ANTHROPIC_API_KEY",
-        "default_model": "claude-opus-5", "key_url": "https://console.anthropic.com/settings/keys",
-        "needs_key": True, "web_search": True,
-        # Organization-wide keys must name a workspace (sent as the anthropic-workspace-id header).
-        "workspace": True,
     },
     "openai": {
         "label": "OpenAI", "company": "GPT models", "kind": "openai", "env": "OPENAI_API_KEY",
@@ -69,14 +62,36 @@ DATA_KEYS = {
     "youtube_api_key": {"env": "YOUTUBE_API_KEY"},
     "twitch_client_id": {"env": "TWITCH_CLIENT_ID"},
     "twitch_client_secret": {"env": "TWITCH_CLIENT_SECRET"},
-    "notify_webhook": {"env": "NOTIFY_WEBHOOK_URL"},  # Slack/Teams/Discord: new creators from repeating searches
+    # Team chat: new creators from repeating searches are posted there (Slack and/or Microsoft Teams).
+    "slack_webhook": {"env": "SLACK_WEBHOOK_URL"},
+    "teams_webhook": {"env": "TEAMS_WEBHOOK_URL"},
 }
+REMOVED_PROVIDERS = {"anthropic"}  # no longer offered: their saved choices and keys are dropped
+
+
+def _migrate(data: dict) -> dict:
+    """Settings saved by older versions: one webhook for any chat becomes the Slack or the Teams one; providers
+    Scout no longer offers are forgotten (their keys too)."""
+    old = (data.pop("notify_webhook", "") or "").strip()
+    if old:
+        teams = any(h in old for h in ("webhook.office.com", "logic.azure.com", "powerplatform.com", "powerautomate"))
+        data.setdefault("teams_webhook" if teams else "slack_webhook", old)
+    for gone in REMOVED_PROVIDERS:
+        data.get("providers", {}).pop(gone, None)
+        for role in ("ai_provider", "writer_provider"):
+            if data.get(role) == gone:
+                data.pop(role)
+    return data
 
 
 def load() -> dict:
     if PATH.exists():
         try:
-            return json.loads(PATH.read_text(encoding="utf-8"))
+            raw = PATH.read_text(encoding="utf-8")
+            data = _migrate(json.loads(raw))
+            if json.dumps(data, indent=2) != raw:  # something was migrated: keep it that way on disk too
+                save(data)
+            return data
         except ValueError:
             pass
     return {}
@@ -125,32 +140,27 @@ def ai_config(provider: str | None = None, overrides: dict | None = None, data: 
     withheld = bool(saved_key and not overrides.get("api_key") and overrides.get("base_url")
                     and not _same_address(overrides["base_url"], saved_url))
     api_key = overrides.get("api_key") or ("" if withheld else saved_key)
-    model = overrides.get("model") or saved.get("model") or (
-        os.getenv("CLAUDE_MODEL") if provider == "anthropic" else None) or p["default_model"]
+    model = overrides.get("model") or saved.get("model") or p["default_model"]
     if p["kind"] == "ollama":  # older settings saved the OpenAI-compatible address
         base_url = base_url.rstrip("/").removesuffix("/v1")
-    workspace_id = (overrides.get("workspace_id") or saved.get("workspace_id")
-                    or (os.getenv("ANTHROPIC_WORKSPACE_ID", "") if p.get("workspace") else "") or "")
     return {
         "provider": provider,
         "label": p["label"],
         "kind": p["kind"],
         "api_key": api_key.strip(),
-        "workspace_id": workspace_id.strip(),
         "model": (model or "").strip(),
         "base_url": (base_url or "").strip(),
         "max_tokens_param": p.get("max_tokens_param", "max_tokens"),
         "max_tokens": p.get("max_tokens", 8000),
         # Creators per scoring request: big batches mean fewer requests, which matters on rate-limited free tiers.
-        "batch_size": p.get("batch_size", 8 if p["kind"] == "anthropic" else 10),
+        "batch_size": p.get("batch_size", 10),
         "fallback_models": [m for m in p.get("fallback_models", []) if m != (model or "").strip()],
-        "web_search": p.get("web_search", False),
         "local": p.get("local", False),
         "self_hosted": p.get("self_hosted", False),
         "concurrency": p.get("concurrency"),
         "timeout": p.get("timeout", 240),
         "temperature": p.get("temperature"),
-        "ready": bool(model) and (bool(api_key) or not p["needs_key"]) and (p["kind"] == "anthropic" or bool(base_url)),
+        "ready": bool(model) and (bool(api_key) or not p["needs_key"]) and bool(base_url),
         "key_withheld": withheld,  # a new address was typed without its key, so the saved key wasn't used
     }
 
@@ -172,14 +182,6 @@ def writer_config() -> dict:
     return ai_config(data=data)
 
 
-def scout_config() -> dict | None:
-    """The AI web scout needs Claude's web search: the writing AI or the search AI, whichever is Claude."""
-    for cfg in (writer_config(), ai_config()):
-        if cfg["web_search"] and cfg["ready"]:
-            return cfg
-    return None
-
-
 def data_key(name: str, data: dict | None = None) -> str:
     data = load() if data is None else data
     return (data.get(name) or os.getenv(DATA_KEYS[name]["env"], "")).strip()
@@ -197,7 +199,6 @@ def source_status() -> dict:
     ai = ai_config()
     return {
         "ai": ai["ready"],
-        "scout": scout_config() is not None,
         "youtube": bool(youtube_key()),
         "tiktok": True,  # Scout's own scraper: no key needed
         "twitch": all(twitch_keys()),  # optional: a free Client ID and Secret
@@ -220,11 +221,8 @@ def public() -> dict:
             "key_url": p["key_url"],
             "needs_key": p["needs_key"],
             "editable_url": p.get("editable_url", False),
-            "web_search": p.get("web_search", False),
             "key_hint": _mask(cfg["api_key"]),
             "model": cfg["model"],
-            "workspace": p.get("workspace", False),
-            "workspace_id": cfg["workspace_id"],  # an ID, not a secret
             "default_model": p["default_model"],
             "base_url": cfg["base_url"] if p.get("editable_url") else "",
             # ✓ in the UI only once the user actually set this provider up: a key, or (for keyless ones
@@ -239,7 +237,8 @@ def public() -> dict:
         "youtube_key_hint": _mask(data_key("youtube_api_key", data)),
         "twitch_id_hint": _mask(data_key("twitch_client_id", data)),
         "twitch_secret_hint": _mask(data_key("twitch_client_secret", data)),
-        "notify_webhook_hint": _mask(data_key("notify_webhook", data)),
+        "slack_webhook_hint": _mask(data_key("slack_webhook", data)),
+        "teams_webhook_hint": _mask(data_key("teams_webhook", data)),
     }
 
 
@@ -261,7 +260,7 @@ def update(changes: dict) -> None:
             continue
         before = ai_config(key, data=data)
         slot = data.setdefault("providers", {}).setdefault(key, {})
-        for field in ("model", "base_url", "workspace_id"):
+        for field in ("model", "base_url"):
             if field == "base_url" and not PROVIDERS[key].get("editable_url"):
                 continue  # a cloud AI's address is fixed
             if values.get(field) is not None:
@@ -276,7 +275,11 @@ def update(changes: dict) -> None:
                                 "A saved key is only sent to the address it was saved with.")
     for name in DATA_KEYS:
         if changes.get(name):
-            data[name] = changes[name].strip()
+            value = changes[name].strip()
+            if name.endswith("_webhook") and not value.lower().startswith("https://"):
+                raise SettingsError(f"The {'Slack' if name == 'slack_webhook' else 'Teams'} webhook must be an "
+                                    "https:// address")
+            data[name] = value
         if changes.get(f"clear_{name}"):
             data.pop(name, None)
     save(data)

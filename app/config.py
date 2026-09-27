@@ -17,10 +17,6 @@ IMG_DIR.mkdir(exist_ok=True)
 
 # API keys and the choice of AI live in app/settings.py (Settings screen, with .env as fallback).
 
-# Claude server-side refusal fallbacks (beta). Turn off with CLAUDE_FALLBACKS=0 if your account rejects it.
-CLAUDE_FALLBACKS = os.getenv("CLAUDE_FALLBACKS", "1").strip() == "1"
-
-
 # Accounts smaller than this aren't creators a brand can work with yet (friends-and-family audiences): searches
 # never keep them and lists never show them, whatever the size filter says.
 MIN_FOLLOWERS = 1000
@@ -28,4 +24,3 @@ MIN_FOLLOWERS = 1000
 # Caps that keep one discovery run to a few minutes and a few dollars.
 MAX_SCORE_PER_JOB = int(os.getenv("MAX_SCORE_PER_JOB", "100"))
 SCORE_BATCH_SIZE = 8
-SCORE_CONCURRENCY = 4

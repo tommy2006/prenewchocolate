@@ -131,19 +131,6 @@ async def _run_source(job, key, label, coro):
         return []
 
 
-async def _scout(http, job, company, market, platforms):
-    status = settings.source_status()
-    found = await llm.web_scout(company, job, market, platforms)
-    label = f"AI web scout ({market})"
-    out = []
-    by_platform = {p: [f["handle"] for f in found if f["platform"] == p] for p in platforms}
-    if by_platform.get("youtube") and status["youtube"]:
-        out += await youtube.lookup_handles(http, by_platform["youtube"], label)
-    if by_platform.get("tiktok") and status["tiktok"]:
-        out += await tiktok.lookup_handles(http, by_platform["tiktok"], label)
-    return out
-
-
 async def _similar(http, job: dict, company: dict, platforms: list[str], size_of) -> list[dict]:
     """"Find more like these": the creators that the starting creators mention or feature."""
     status = settings.source_status()
@@ -299,11 +286,6 @@ async def run_job(job_id: str) -> None:
                         terms = [terms[plans.index(plan) % len(terms)]] if terms else []
                     tasks.append(_run_source(job, f"tw_{m}", f"Twitch · {MARKETS[m]['name']}",
                                              twitch.discover(http, terms, m, lang, *size_of("twitch"))))
-                if job.get("ai_scout") and settings.scout_config():
-                    tasks.append(_run_source(job, f"ai_{m}", f"AI web scout · {MARKETS[m]['name']}",
-                                             _scout(http, job, company, m, platforms)))
-                elif job.get("ai_scout"):
-                    _step(job, f"ai_{m}", f"AI web scout · {MARKETS[m]['name']}", "skipped", "needs Claude in Settings")
             results = await asyncio.gather(*tasks)
 
             candidates: dict[str, dict] = {}
@@ -380,8 +362,8 @@ async def run_job(job_id: str) -> None:
 
 
 async def _notify_watch(job: dict, company: dict) -> None:
-    """A repeating search found new creators: tell the team's chat, if a webhook is set."""
-    if not settings.data_key("notify_webhook"):
+    """A repeating search found new creators: tell the team's chat (Slack and/or Teams), if a webhook is set."""
+    if not notify.any_channel():
         return
     matches = store.matches.get(company["id"], {})
     new = sorted(((store.creators[cid], m) for cid, m in matches.items() if m.get("job_id") == job["id"] and cid in store.creators),
@@ -389,11 +371,10 @@ async def _notify_watch(job: dict, company: dict) -> None:
     if not new:
         return
     watch = next((w for w in company.get("watches", []) if w["id"] == job.get("watch_id")), {})
-    text = notify.summary(watch.get("label") or "a repeating search", new, [cm for cm in new if metrics.rising(*cm)],
-                          os.getenv("SCOUT_PUBLIC_URL", ""))
-    problem = await notify.send(text)
-    if problem:
-        log.info("webhook for job %s: %s", job["id"], problem)
+    msg = notify.watch_message(watch.get("label") or "a repeating search", new, [cm for cm in new if metrics.rising(*cm)],
+                               os.getenv("SCOUT_PUBLIC_URL", ""))
+    for channel, problem in (await notify.post_all(msg)).items():
+        log.info("%s webhook for job %s: %s", channel, job["id"], problem)
 
 
 async def run_tracker(job_id: str) -> None:
@@ -659,9 +640,9 @@ async def ai_check(job: dict, company: dict, creators: list[dict], ai: dict) -> 
     label = f"AI check with {ai['label']}" + (" (on this computer)" if ai["local"] else "")
     _step(job, "score", label, detail=f"0 / {len(creators)}")
     company_matches = store.matches.setdefault(company["id"], {})
-    # A laptop runs one local request at a time; Claude and your own GPU server handle parallel batches well;
-    # free tiers need care.
-    sem = asyncio.Semaphore(ai.get("concurrency") or (1 if ai["local"] else config.SCORE_CONCURRENCY if ai["kind"] == "anthropic" else 2))
+    # A laptop runs one local request at a time; your own GPU server handles parallel batches well (its own
+    # "concurrency"); cloud free tiers need care.
+    sem = asyncio.Semaphore(ai.get("concurrency") or (1 if ai["local"] else 2))
     outside = 0
 
     async def check(batch):

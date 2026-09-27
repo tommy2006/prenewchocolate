@@ -256,7 +256,7 @@ async def sample_comments(http, creator: dict, videos: int = 3, per_video: int =
 
 
 async def lookup_handles(http, handles: list[str], label: str) -> list[dict]:
-    """Resolve @handles (e.g. from the AI web scout) or channel IDs (UC…) into full creator records."""
+    """Resolve @handles or channel IDs (UC…) into full creator records."""
     async def resolve(h):
         if h.startswith("UC") and len(h) == 24:
             return h

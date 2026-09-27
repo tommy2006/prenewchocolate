@@ -1,99 +1,24 @@
-"""All AI calls: search planning, creator scoring, pitch drafting, tag suggestions, web scouting.
+"""All AI calls: search planning, creator scoring, pitch drafting, tag suggestions.
 
-Works with Claude (Anthropic SDK) or any OpenAI-compatible API (OpenAI, Gemini, OpenRouter, Ollama, ...),
-whichever is chosen in Settings. Every call asks for JSON that matches a schema.
+Works with a local model (Ollama) or any OpenAI-compatible API (your own GPU server, OpenAI, Gemini, OpenRouter,
+...), whichever is chosen in Settings. Every call asks for JSON that matches a schema.
 """
 import asyncio
 import json
 import logging
 import re
 
-import anthropic
 import httpx
 
-from . import config, partners, settings
+from . import partners, settings
 from .store import store
-from .markets import LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS
+from .markets import LANGUAGES, MARKETS, PLATFORMS
 from .rules import age_estimate
 
 log = logging.getLogger("scout")
 
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
-
-_claude_clients: dict[str, anthropic.AsyncAnthropic] = {}
-_use_fallbacks = config.CLAUDE_FALLBACKS
-
-
 class LLMError(Exception):
     pass
-
-
-# --- Claude ----------------------------------------------------------------------------------
-
-def _claude(ai: dict) -> anthropic.AsyncAnthropic:
-    workspace = ai.get("workspace_id") or ""
-    cache_key = f"{ai['api_key']}|{workspace}"
-    if cache_key not in _claude_clients:
-        # Organization-wide keys must say which workspace to bill/use; workspace keys don't need this.
-        headers = {"anthropic-workspace-id": workspace} if workspace else None
-        _claude_clients[cache_key] = anthropic.AsyncAnthropic(api_key=ai["api_key"], max_retries=3, default_headers=headers)
-    return _claude_clients[cache_key]
-
-
-WORKSPACE_HELP = ("This Claude key belongs to your whole organization, so it needs a workspace. Paste your "
-                  "Workspace ID (starts with wrkspc_) in Settings → Claude, or create an API key inside a workspace.")
-
-
-def _claude_bad_request(e: anthropic.BadRequestError) -> LLMError | None:
-    if "workspace" in str(e).lower():
-        return LLMError(WORKSPACE_HELP if "anthropic-workspace-id" in str(e)
-                        else f"Claude workspace problem: {e.message}. Check the Workspace ID in Settings.")
-    return None
-
-
-async def _create(ai: dict, **kwargs):
-    """Claude messages.create with server-side refusal fallbacks when the account supports them."""
-    global _use_fallbacks
-    try:
-        if _use_fallbacks:
-            try:
-                return await _claude(ai).beta.messages.create(betas=[FALLBACK_BETA], fallbacks="default", **kwargs)
-            except anthropic.BadRequestError as e:
-                if "fallback" not in str(e).lower():
-                    raise
-                _use_fallbacks = False  # not enabled for this account/model; continue without it
-        return await _claude(ai).messages.create(**kwargs)
-    except anthropic.BadRequestError as e:
-        raise _claude_bad_request(e) or LLMError(f"Claude API error 400: {e.message}") from e
-    except anthropic.AuthenticationError as e:
-        raise LLMError("Claude rejected the API key. Check it in Settings.") from e
-    except anthropic.NotFoundError as e:
-        raise LLMError(f"Claude model '{ai['model']}' isn't available to this key. Pick another in Settings.") from e
-    except anthropic.RateLimitError as e:
-        raise LLMError("Claude rate limit reached. Wait a minute and try again.") from e
-    except anthropic.APIConnectionError as e:
-        raise LLMError("Can't reach the Claude API. Check the internet connection.") from e
-    except anthropic.APIStatusError as e:
-        raise LLMError(f"Claude API error {e.status_code}: {e.message}") from e
-
-
-async def _json_claude(ai, system, user, schema, effort, max_tokens) -> dict:
-    resp = await _create(
-        ai,
-        model=ai["model"],
-        max_tokens=max_tokens,
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": user}],
-        output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
-    )
-    if resp.stop_reason == "refusal":
-        raise LLMError("Claude declined this request")
-    if resp.stop_reason == "max_tokens":
-        raise LLMError("Claude's answer was cut off (max_tokens)")
-    text = next((b.text for b in resp.content if b.type == "text"), None)
-    if text is None:
-        raise LLMError("Claude returned no text")
-    return json.loads(text)
 
 
 # --- OpenAI-compatible (OpenAI, Gemini, OpenRouter, Ollama, ...) -------------------------------
@@ -294,13 +219,10 @@ def clear_overrides() -> None:
     model_overrides.clear()
 
 
-async def _json(system: str, user: str, schema: dict, effort: str = "medium", max_tokens: int = 16000,
-                ai: dict | None = None) -> dict:
+async def _json(system: str, user: str, schema: dict, max_tokens: int = 16000, ai: dict | None = None) -> dict:
     ai = ai or settings.ai_config()
     if not ai["ready"]:
         raise LLMError("No AI is set up yet. Open Settings and add a key for the AI you want to use.")
-    if ai["kind"] == "anthropic":
-        return await _json_claude(ai, system, user, schema, effort, max_tokens)
     if ai["kind"] == "ollama":
         return await _json_ollama(ai, system, user, schema, max_tokens)
     # Try the configured model (or the one that already replaced it), then lighter ones from the same provider.
@@ -331,9 +253,7 @@ async def test_ai(ai: dict) -> str:
     """Tiny round trip for the Settings 'Test' button. Tests exactly the chosen model (no fallback)."""
     args = ("You are a connectivity check.", 'Reply with {"ok": true, "model": "<your model name>"}.',
             _obj({"ok": BOOL, "model": STR}))
-    if ai["kind"] == "anthropic":
-        data = await _json(*args, effort="low", max_tokens=1000, ai=ai)
-    elif ai["kind"] == "ollama":
+    if ai["kind"] == "ollama":
         data = await _json_ollama(ai, *args, max_tokens=200)
     else:
         data = await _json_openai(ai, *args, max_tokens=1000)
@@ -347,7 +267,6 @@ async def test_ai(ai: dict) -> str:
 _PREFERRED = {
     "gemini": [r"^gemini-(\d+(?:\.\d+)?)-flash$", r"^gemini-(\d+(?:\.\d+)?)-flash-lite$", r"^gemini-(\d+(?:\.\d+)?)-pro$"],
     "openai": [r"^gpt-(\d+(?:\.\d+)?)-mini$", r"^gpt-(\d+(?:\.\d+)?)$"],
-    "anthropic": [r"^claude-opus-(\d+(?:-\d+)?)$", r"^claude-sonnet-(\d+(?:-\d+)?)$"],
 }
 
 
@@ -368,17 +287,6 @@ def recommend_model(provider: str, models: list[str], current: str) -> str:
 
 async def list_models(ai: dict) -> list[str]:
     """Model names this key can use, for the Settings dropdown."""
-    if ai["kind"] == "anthropic":
-        if not ai["api_key"]:
-            return []
-        try:
-            return [m.id async for m in _claude(ai).models.list(limit=100)]
-        except anthropic.BadRequestError as e:
-            raise _claude_bad_request(e) or LLMError(f"Couldn't list Claude models: {e.message}") from e
-        except anthropic.AuthenticationError as e:
-            raise LLMError("Claude rejected the API key. Check it in Settings.") from e
-        except anthropic.APIError as e:
-            raise LLMError(f"Couldn't list Claude models: {e}") from e
     if ai["kind"] == "ollama":
         try:
             async with httpx.AsyncClient(timeout=10) as http:
@@ -865,7 +773,7 @@ PARSE_SCHEMA = _obj({
 async def parse_query(text: str, known_tags: list[str]) -> dict:
     allowed = ", ".join(f"{code} ({m['name']})" for code, m in MARKETS.items())
     user = f"Allowed market codes: {allowed}\nCreator types this team uses: {', '.join(known_tags) or 'none'}\n\nText: {text}"
-    return await _json(PARSE_SYSTEM, user, PARSE_SCHEMA, effort="low", max_tokens=800)
+    return await _json(PARSE_SYSTEM, user, PARSE_SCHEMA, max_tokens=800)
 
 
 # --- Brand profile from a website -----------------------------------------------------------------
@@ -902,7 +810,7 @@ async def profile_from_website(url: str, name: str = "") -> dict:
     if len(text) < 200:
         raise LLMError("That page has almost no text Scout can read (it may need JavaScript). Fill the profile in by hand.")
     user = f"Company: {name or 'unknown'}\nWebsite: {url}\n\nWebsite text:\n{text[:9000]}"
-    return await _json(PROFILE_SYSTEM, user, PROFILE_SCHEMA, effort="low", max_tokens=2000)
+    return await _json(PROFILE_SYSTEM, user, PROFILE_SCHEMA, max_tokens=2000)
 
 
 # --- Outreach --------------------------------------------------------------------------------
@@ -935,79 +843,6 @@ TAGS_SYSTEM = """You help a marketing team decide which social media creators to
 
 async def suggest_tags(name: str, description: str, existing: list[str]) -> list[str]:
     user = f"Company: {name}\nAbout: {description or 'n/a'}\nAlready have: {', '.join(existing) or 'none'}"
-    data = await _json(TAGS_SYSTEM, user, _obj({"tags": STR_LIST}), effort="low", max_tokens=2000)
+    data = await _json(TAGS_SYSTEM, user, _obj({"tags": STR_LIST}), max_tokens=2000)
     have = {t.lower() for t in existing}
     return [t.strip() for t in data["tags"] if isinstance(t, str) and t.strip() and t.lower() not in have][:10]
-
-
-# --- AI web scout ----------------------------------------------------------------------------
-
-SCOUT_TOOL = {
-    "name": "report_creators",
-    "description": "Report the creators you found. Call this exactly once, at the end of your research.",
-    "strict": True,
-    "input_schema": _obj({
-        "creators": {"type": "array", "items": _obj({
-            "platform": {"type": "string", "enum": list(SEARCH_PLATFORMS)},
-            "handle": STR,
-            "evidence": STR,
-        })},
-    }),
-}
-
-HANDLE_RE = {
-    "youtube": re.compile(r"youtube\.com/@([\w.\-]+)", re.I),
-    "tiktok": re.compile(r"tiktok\.com/@([\w.\-]+)", re.I),
-    "instagram": re.compile(r"instagram\.com/([\w.]+)", re.I),
-}
-
-
-def _clean_handle(platform: str, raw: str) -> str | None:
-    raw = (raw or "").strip()
-    m = HANDLE_RE[platform].search(raw)
-    handle = m.group(1) if m else raw.lstrip("@").split("/")[0]
-    return handle if re.fullmatch(r"[\w.\-]{2,40}", handle) else None
-
-
-async def web_scout(company: dict, search: dict, market: str, platforms: list[str], limit: int = 12) -> list[dict]:
-    """Let Claude search the open web (lists, forums, local press) for small creators hashtag search misses.
-
-    Claude only: it relies on Anthropic's server-side web search tool.
-    """
-    ai = settings.scout_config()
-    if not ai:
-        raise LLMError("The AI web scout needs Claude (as the search or writing AI in Settings)")
-    names = ", ".join(PLATFORMS[p] for p in platforms)
-    prompt = (
-        f"{brand_block(company, search)}\n\n"
-        f"Find up to {limit} real creators on {names} who are based in {MARKETS[market]['name']} "
-        f"and match the search above.\n"
-        f"Stay inside the follower range. Prioritise small and mid-sized creators that big influencer databases miss: "
-        f"look at local creator lists, forum and Reddit recommendations, local press, event line-ups and "
-        f"collaborations between creators. Only report accounts you saw evidence for, with their exact handle. "
-        f"When you are done, call report_creators once."
-    )
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}, SCOUT_TOOL]
-    messages = [{"role": "user", "content": prompt}]
-    for _ in range(4):
-        resp = await _create(
-            ai, model=ai["model"], max_tokens=16000, tools=tools, messages=messages,
-            output_config={"effort": "medium"},
-        )
-        for block in resp.content:
-            if block.type == "tool_use" and block.name == "report_creators":
-                found = []
-                for c in block.input.get("creators", []):
-                    if c.get("platform") in platforms:
-                        handle = _clean_handle(c["platform"], c.get("handle", ""))
-                        if handle:
-                            found.append({"platform": c["platform"], "handle": handle, "evidence": c.get("evidence", "")})
-                return found
-        messages.append({"role": "assistant", "content": resp.content})
-        if resp.stop_reason == "pause_turn":
-            continue  # server-side search loop paused; resume it
-        if resp.stop_reason == "end_turn":
-            messages.append({"role": "user", "content": "Now call report_creators with the creators you found."})
-            continue
-        break
-    return []

@@ -208,7 +208,7 @@ async def discover(http, queries: list[str], hashtags: list[str], market: str, f
 
 
 async def lookup_handles(http, handles: list[str], label: str) -> list[dict]:
-    """Full records for known @handles (AI web scout, or a TikTok linked from a YouTube channel)."""
+    """Full records for known @handles (a TikTok linked from another profile, a tracker row or a pasted link)."""
     quick = [c for c in await asyncio.gather(*(_quick(http, h.lstrip("@")) for h in handles)) if c]
     return await complete(http, quick, label)
 

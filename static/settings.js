@@ -14,6 +14,7 @@ async function openSettings() {
   let writer = st.writer_provider || "";
   const drafts = {}; // unsaved edits per provider, so switching back and forth keeps what was typed
   let local = null;  // /api/local-ai: this computer, the recommended model, Ollama status, download
+  const removeWebhook = {}; // channel -> true once "Remove" was clicked (applied on Save)
   let localTimer = null;
 
   dlg.innerHTML = `
@@ -31,7 +32,7 @@ async function openSettings() {
         </section>
         <section class="set-section">
           <h3>Writing AI</h3>
-          <p class="muted small">Only used when you click <i>Draft a message</i> or <i>Deep evaluation</i>, or turn on the AI web scout. A paid AI writes better Finnish or German, and costs cents per message.</p>
+          <p class="muted small">Only used when you click <i>Draft a message</i> or <i>Deep evaluation</i>. A paid AI writes better Finnish or German, and costs cents per message.</p>
           <select id="writer-provider" class="model-select" aria-label="Writing AI"></select>
         </section>
         <section class="set-section">
@@ -51,14 +52,11 @@ async function openSettings() {
         </section>
         <section class="set-section">
           <h3>Notifications <em class="opt">optional</em></h3>
-          <div class="field"><span>Team chat webhook</span>
-            <div class="key-row">
-              <input type="password" id="webhook-url" autocomplete="off" placeholder="${st.notify_webhook_hint ? `Saved (${esc(st.notify_webhook_hint)}). Paste a new one to replace it` : "https://hooks.slack.com/services/…"}">
-              <button type="button" class="btn small" data-act="test-webhook">Send a test</button>
-            </div>
-            <span class="test-msg" id="webhook-msg"></span>
-            <small>A Slack, Teams or Discord incoming webhook. When a repeating search finds new creators, Scout posts the best ones (and any rising star) there.</small>
-          </div>
+          <p class="muted small">When a repeating search finds new creators, Scout posts the best ones (and any rising star) to your team's chat. Add Slack, Teams or both.</p>
+          ${webhookField("slack", "Slack", st.slack_webhook_hint, "https://hooks.slack.com/services/…",
+            "In Slack: api.slack.com/apps → Create New App → Incoming Webhooks → turn on → Add New Webhook → pick the channel → copy the Webhook URL.")}
+          ${webhookField("teams", "Microsoft Teams", st.teams_webhook_hint, "https://…/workflows/…",
+            "In Teams: open the channel → ⋯ → Workflows → “Post to a channel when a webhook request is received” → Next → Add workflow → copy the URL.")}
         </section>
       </div>
       <div class="dlg-foot">
@@ -86,7 +84,6 @@ async function openSettings() {
       api_key: $("#ai-key")?.value.trim() || "",
       model: model === "__custom__" ? "" : model,
       base_url: $("#ai-url")?.value.trim() ?? drafts[provider]?.base_url ?? null,
-      workspace_id: $("#ai-workspace")?.value.trim() ?? null,
       clear_key: drafts[provider]?.clear_key || false,
     };
   };
@@ -107,7 +104,7 @@ async function openSettings() {
     const opts = Object.entries(st.providers).filter(([k, p]) => !p.local && (p.key_hint || k === writer));
     $("#writer-provider").innerHTML = `<option value="">Same as the search AI (${esc(st.providers[provider].label)})</option>`
       + opts.map(([k, p]) => `<option value="${k}" ${k === writer ? "selected" : ""}>${esc(p.label)}${p.model ? ` (${esc(p.model)})` : ""}</option>`).join("")
-      + (opts.length ? "" : `<option disabled>Add a Claude, OpenAI or Gemini key above to use it here</option>`);
+      + (opts.length ? "" : `<option disabled>Add an OpenAI, Gemini or OpenRouter key above to use it here</option>`);
   };
 
   const gb = (bytes) => (bytes / 1024 ** 3).toFixed(1);
@@ -194,10 +191,6 @@ async function openSettings() {
       </div>` : `<p class="note">No key needed. ${provider === "ollama" ? `Install Ollama, run a model once (for example <code>ollama run ${esc(p.default_model)}</code>), and keep it running. Local models are free but slower and less precise.` : ""}</p>`;
     $("#ai-fields").innerHTML = `
       ${keyField}
-      ${p.workspace ? `<div class="field" id="workspace-field"><span>Workspace ID <span class="muted">(only if your key asks for one)</span></span>
-        <input type="text" id="ai-workspace" value="${esc(d.workspace_id ?? p.workspace_id ?? "")}" placeholder="wrkspc_…" autocomplete="off" spellcheck="false">
-        <small>Organization-wide Claude keys need it. Find it in the Claude Console under Settings → Workspaces, or create the API key inside a workspace instead.</small>
-      </div>` : ""}
       ${p.editable_url ? `<div class="field"><span>Address</span>
         <input type="url" id="ai-url" value="${esc(d.base_url ?? p.base_url)}" placeholder="${provider === "gpu" ? "http://YOUR-SERVER-IP:8000/v1" : "https://your-server/v1"}">
         ${provider === "gpu" ? `<small>Run <code>scripts/verda_setup.sh</code> on the server once; it prints the address and key to paste here.</small>` : ""}</div>` : ""}
@@ -210,8 +203,7 @@ async function openSettings() {
       <div class="test-row">
         <button type="button" class="btn small" data-act="test-ai">Test ${esc(p.label)}</button>
         <span class="test-msg" id="ai-test-msg"></span>
-      </div>
-      ${p.web_search ? `<p class="note">Claude costs money per search. Cheaper: use the Local AI for searches and Claude only as the writing AI below.</p>` : ""}`;
+      </div>`;
     // A key is already saved: fetch the model list right away so a retired default gets replaced.
     if (!l && !autoTried[provider] && p.needs_key && (p.key_hint || d.api_key) && !d.clear_key) {
       autoTried[provider] = true;
@@ -271,10 +263,6 @@ async function openSettings() {
   dlg.onpaste = keyEntered;
   dlg.onchange = (e) => {
     if (e.target.id === "ai-key") return keyEntered(e);
-    if (e.target.id === "ai-workspace") {  // new workspace: reload models and test straight away
-      delete loaded[provider];
-      return loadModels({ thenTest: true });
-    }
     if (e.target.id === "writer-provider") { writer = e.target.value; return; }
     if (e.target.id === "ai-model" && e.target.value === "__custom__") {
       readFields();
@@ -287,17 +275,12 @@ async function openSettings() {
   const aiBody = () => {
     readFields();
     const d = drafts[provider] || {};
-    return { target: "ai", provider, api_key: d.api_key || null, model: d.model || null, base_url: d.base_url || null,
-             workspace_id: d.workspace_id || null };
+    return { target: "ai", provider, api_key: d.api_key || null, model: d.model || null, base_url: d.base_url || null };
   };
 
   const showResult = (el, r) => {
     el.className = `test-msg ${r.ok ? "ok" : "bad"}`;
     el.textContent = (r.ok ? "✓ " : "✗ ") + r.message;
-    // Key needs a workspace: point straight at the field that fixes it.
-    const ws = $("#workspace-field");
-    if (ws) ws.classList.toggle("needs-input", !r.ok && /workspace/i.test(r.message));
-    if (ws && !r.ok && /workspace/i.test(r.message)) $("#ai-workspace").focus();
   };
 
   dlg.onclick = async (e) => {
@@ -334,13 +317,22 @@ async function openSettings() {
       if (b) b.disabled = false;
     } else if (act === "test-ai") {
       await runTest();
-    } else if (act === "test-webhook") {
+    } else if (act === "test-webhook") {  // the address typed in the field, else the saved one
+      const channel = btn.dataset.channel;
       btn.disabled = true;
-      const msg = $("#webhook-msg");
+      const msg = $(`#${channel}-webhook-msg`);
       msg.className = "test-msg"; msg.textContent = "Sending…";
-      try { showResult(msg, await api("/api/settings/test", { method: "POST", body: { target: "webhook", notify_webhook: $("#webhook-url").value.trim() || null } })); }
+      const body = { target: channel, webhook_url: $(`#${channel}-webhook`).value.trim() || null };
+      try { showResult(msg, await api("/api/settings/test", { method: "POST", body })); }
       catch (err) { showResult(msg, { ok: false, message: err.message }); }
       finally { btn.disabled = false; }
+    } else if (act === "clear-webhook") {
+      const channel = btn.dataset.channel;
+      removeWebhook[channel] = true;
+      const input = $(`#${channel}-webhook`);
+      input.value = "";
+      input.placeholder = "Removed when you save. Paste a new one to keep posting";
+      btn.remove();
     } else if (act === "test-youtube" || act === "test-twitch") {
       const which = act.slice(5);
       btn.disabled = true;
@@ -362,12 +354,14 @@ async function openSettings() {
       writer_provider: writer,
       providers: Object.fromEntries(Object.entries(drafts).map(([k, d]) => [k, {
         api_key: d.api_key || null, model: d.model ?? null, base_url: d.base_url ?? null, clear_key: !!d.clear_key,
-        workspace_id: d.workspace_id ?? null,
       }])),
       youtube_api_key: $("#youtube-key").value.trim() || null,
       twitch_client_id: $("#twitch-id").value.trim() || null,
       twitch_client_secret: $("#twitch-secret").value.trim() || null,
-      notify_webhook: $("#webhook-url").value.trim() || null,
+      ...Object.fromEntries(["slack", "teams"].flatMap((channel) => {
+        const url = $(`#${channel}-webhook`).value.trim();
+        return [[`${channel}_webhook`, url || null], [`clear_${channel}_webhook`, !url && !!removeWebhook[channel]]];
+      })),
     };
     try {
       await api("/api/settings", { method: "PUT", body });
@@ -394,6 +388,21 @@ function dataKeyField(which, label, hint, help) {
         <button type="button" class="btn small" data-act="test-${which}">Test</button>
       </div>
       <span class="test-msg" id="${which}-msg"></span>
+      <small>${esc(help)}</small>
+    </div>`;
+}
+
+// A team-chat webhook (Slack or Teams): paste, test, remove.
+function webhookField(channel, label, hint, placeholder, help) {
+  return `
+    <div class="field"><span>${esc(label)}</span>
+      <div class="key-row">
+        <input type="password" id="${channel}-webhook" autocomplete="off" spellcheck="false" aria-label="${esc(label)} webhook address"
+          placeholder="${hint ? `Saved (${esc(hint)}). Paste a new one to replace it` : esc(placeholder)}">
+        <button type="button" class="btn small" data-act="test-webhook" data-channel="${channel}">Send a test</button>
+      </div>
+      ${hint ? `<button type="button" class="btn link small-link" data-act="clear-webhook" data-channel="${channel}">Remove saved webhook</button>` : ""}
+      <span class="test-msg" id="${channel}-webhook-msg"></span>
       <small>${esc(help)}</small>
     </div>`;
 }

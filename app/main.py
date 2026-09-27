@@ -167,7 +167,7 @@ def _ai_summary() -> dict:
     ai, writer = settings.ai_config(), settings.writer_config()
     return {"provider": ai["provider"], "label": ai["label"], "model": ai["model"], "local": ai["local"],
             "check_limit": check_limit(ai),
-            "ready": ai["ready"], "web_search": settings.scout_config() is not None,
+            "ready": ai["ready"],
             "writer": {"label": writer["label"], "model": writer["model"], "local": writer["local"]}}
 
 
@@ -239,7 +239,6 @@ class SearchIn(BaseModel):
     deal_types: list[str] = []
     avoid: list[str] = []
     example_creators: list[str] = []
-    ai_scout: bool = False
     size_preset: str = ""  # "usual": the company's usual size per platform, from the brand profile
 
 
@@ -998,7 +997,6 @@ def _new_job(company_id: str, platforms: list[str], markets: list[str], size: tu
         "deal_types": [],
         "avoid": [],
         "example_creators": [],
-        "ai_scout": False,
         "status": "queued",
         "steps": [],
         "found": 0,
@@ -1023,7 +1021,7 @@ async def start_job(company_id: str, body: JobIn):
     company["search"] = SearchIn(**body.model_dump(exclude={"focus"})).model_dump()
     job = _new_job(company_id, platforms, markets, _size_range(company, body, platforms), all_markets=all_markets,
                    focus=body.focus.strip(), tags=body.tags, deal_types=body.deal_types, avoid=body.avoid,
-                   example_creators=body.example_creators, ai_scout=body.ai_scout)
+                   example_creators=body.example_creators)
     _run(job["id"], run_job(job["id"]))
     return job
 
@@ -1136,7 +1134,7 @@ def _run_watch(company: dict, w: dict) -> dict | None:
         return None
     job = _new_job(company["id"], platforms, markets, _size_range(company, body, platforms),
                    focus=body.focus.strip(), tags=body.tags, deal_types=body.deal_types, avoid=body.avoid,
-                   example_creators=body.example_creators, ai_scout=False, watch_id=w["id"], auto=True)
+                   example_creators=body.example_creators, watch_id=w["id"], auto=True)
     w["last_run_at"], w["last_job_id"] = now_iso(), job["id"]
     store.save()
     _run(job["id"], run_job(job["id"]))
@@ -1325,7 +1323,6 @@ class ProviderIn(BaseModel):
     api_key: str | None = None  # empty = keep the saved key
     model: str | None = None
     base_url: str | None = None
-    workspace_id: str | None = None  # Claude organization-wide keys only
     clear_key: bool = False
 
 
@@ -1339,8 +1336,10 @@ class SettingsIn(BaseModel):
     clear_twitch_client_id: bool = False
     twitch_client_secret: str | None = None
     clear_twitch_client_secret: bool = False
-    notify_webhook: str | None = None
-    clear_notify_webhook: bool = False
+    slack_webhook: str | None = None
+    clear_slack_webhook: bool = False
+    teams_webhook: str | None = None
+    clear_teams_webhook: bool = False
 
 
 @app.get("/api/settings")
@@ -1363,20 +1362,19 @@ async def put_settings(body: SettingsIn):
 
 
 class TestIn(BaseModel):
-    target: str  # "ai" | "youtube" | "twitch" | "webhook"
+    target: str  # "ai" | "youtube" | "twitch" | "slack" | "teams"
     provider: str | None = None
     api_key: str | None = None
     model: str | None = None
     base_url: str | None = None
-    workspace_id: str | None = None
     youtube_api_key: str | None = None
     twitch_client_id: str | None = None
     twitch_client_secret: str | None = None
-    notify_webhook: str | None = None
+    webhook_url: str | None = None  # "slack" / "teams" tests: the address typed in the form (else the saved one)
 
 
 def _ai_overrides(body: "TestIn") -> dict:
-    return {"api_key": body.api_key, "model": body.model, "base_url": body.base_url, "workspace_id": body.workspace_id}
+    return {"api_key": body.api_key, "model": body.model, "base_url": body.base_url}
 
 
 def _key_hint(message: str, ai: dict) -> str:
@@ -1409,10 +1407,9 @@ async def test_settings(body: TestIn):
             if not client_id or not secret:
                 return {"ok": False, "message": "Add both the Client ID and the Client Secret"}
             return {"ok": True, "message": await twitch.check(client_id, secret)}
-        if body.target == "webhook":
-            problem = await notify.send("Scout is connected: new creators from repeating searches will be posted here.",
-                                        body.notify_webhook or None)
-            return {"ok": not problem, "message": problem or "Sent a test message"}
+        if body.target in notify.CHANNELS:  # "slack" | "teams"
+            problem = await notify.post(body.target, notify.test_message(), body.webhook_url or None)
+            return {"ok": not problem, "message": problem or f"Sent a test message to {notify.NAMES[body.target]}"}
     except (llm.LLMError, CheckError, twitch.TwitchError) as e:
         return {"ok": False, "message": str(e)}
     raise HTTPException(400, "Unknown test")

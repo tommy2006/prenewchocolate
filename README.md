@@ -19,8 +19,6 @@ Scout automates influencer discovery for brands like Prenew, with a focus on mic
    Twitch shows no likes, comments or past live viewers, so Twitch creators get no price estimate and "views per
    video" are views of their recent past broadcasts. Instagram and Facebook have no search a tool like this may use,
    so they appear only as profiles a creator links to (contacts and the export).
-   An optional **AI web scout** lets Claude search forums, local creator lists and press for creators that
-   hashtags miss. It's off by default: it runs paid web searches (about $1–3 per market).
 3. **Filter.** Keeps only creators inside the follower range who posted in the last 4 months.
 4. **Read the audience.** For YouTube creators Scout samples about 100 real viewer comments from their 3 latest videos
    (1 quota unit per video): which language viewers write in, whether comments are real conversation or emoji and
@@ -143,18 +141,25 @@ column for that post), audience authenticity, comment languages, sponsorship his
      model (for example `qwen3.5:4b` on a laptop without a graphics card) and downloads it with one button.
      **Your GPU server** runs a large open model on your own machine (for example a Verda instance with 2× H200):
      no cost per search, so the AI checks *every* creator, several at a time. See *Your own GPU server* below.
-     Claude, OpenAI, Gemini, OpenRouter or any OpenAI-compatible API work too, but cost money per search.
+     OpenAI, Gemini, OpenRouter or any OpenAI-compatible API work too, but cost money per search.
    - **Writing AI** (optional, only when you click): drafts outreach messages in the creator's language and
-     runs the AI web scout. A paid AI like Claude writes better Finnish or German; a message costs about a cent.
+     runs deep evaluations. A paid AI like OpenAI or Gemini writes better Finnish or German; a message costs about
+     a cent.
    - **YouTube**: Google Cloud console, then enable *YouTube Data API v3*, then Credentials, then *Create API key* (free, 10k units/day)
    - **TikTok** needs nothing: Scout scrapes TikTok's public pages itself.
+   - **Notifications** (optional): a **Slack** and/or **Microsoft Teams** webhook. When a repeating search finds
+     new creators, Scout posts the best ones (and any rising star) there. *Send a test* checks each one.
+     Slack: [api.slack.com/apps](https://api.slack.com/apps) → *Create New App* → *Incoming Webhooks* → *Add New
+     Webhook* → pick the channel. Teams: in the channel, *⋯* → *Workflows* → *Post to a channel when a webhook
+     request is received* → copy the URL. Put `SCOUT_PUBLIC_URL=https://your-scout` in `.env` and the messages
+     get an *Open Scout* link.
 
    Changes apply immediately. Keys are stored in `data/settings.json` on this computer.
 
    **Gemini free tier:** quotas are small and per model. When one model's quota runs out (or Google is
    overloaded), Scout switches to a lighter Gemini model by itself and says so in the progress bar.
    Creators that still can't be scored get a *Retry scoring* button. For a demo, enable billing on the
-   Google AI Studio project (Flash-Lite costs cents per search) or use Claude/OpenAI.
+   Google AI Studio project (Flash-Lite costs cents per search) or use OpenAI.
    Keys in `.env` still work as a fallback.
 
 ### Your own GPU server (Verda or any Linux GPU machine)
@@ -174,7 +179,7 @@ The first run takes 20–40 minutes (mostly the model download, kept for next ti
 and the writing AI, and Save. The address is plain HTTP protected by the key; for an encrypted connection run
 `PUBLIC=0 bash verda_setup.sh` and use an SSH tunnel (`ssh -N -L 8000:localhost:8000 root@SERVER-IP`, address
 `http://localhost:8000/v1`). If the address doesn't answer, open TCP port 8000 in the server's firewall.
-Other options: `MODEL=org/name` for another Hugging Face model, `PORT=...`. The optional AI web scout still needs Claude.
+Other options: `MODEL=org/name` for another Hugging Face model, `PORT=...`.
 
 Check everything from the command line with `.venv/Scripts/python scripts/check_keys.py`.
 
@@ -199,7 +204,7 @@ test or to save). Anyone logged in can still use the keys and change Settings, s
 - TikTok: free. About 1 minute per market (web searches, then a few public TikTok pages per creator, 4 at a time).
 - AI: **nothing with the Local AI.** On a laptop CPU the AI check takes about 1–2 minutes per 4 creators;
   quick scores appear at once, so the grid fills before the AI is done. A cloud AI is faster but costs per
-  search. Claude is only called when you draft a message or turn on the web scout.
+  search. The writing AI is only called when you draft a message or ask for a deep evaluation.
 - Time: 2–4 minutes to quick scores, plus the AI check. **Stop** ends a search early and keeps what was
   already ranked.
 
@@ -228,7 +233,7 @@ app/main.py        HTTP API + serves the UI
 app/auth.py        the team password (SCOUT_PASSWORD) and login cookie; without one, only this computer is served
 app/pipeline.py    one discovery run: plan, source, filter, score
 app/llm.py         AI prompts (planning, scoring with cited evidence, deep evaluation, search bar, brand profile from a
-                   website, pitch, tags, web scout); local models (Ollama), Claude SDK or any OpenAI-compatible API
+                   website, pitch, tags); local models (Ollama) or any OpenAI-compatible API
 app/rules.py       free quick scores without AI, with evidence (content, audience, market, brand, readiness) and search templates
 app/scoring.py     the match model: Fit and Audience quality, campaign-goal weights, confidence
 app/audience.py    comment language and quality, authenticity signals, sponsorship, estimated price

@@ -126,7 +126,7 @@ function hideTip() { tipEl.hidden = true; }
 
 // ---------- State ----------
 // Search criteria (saved per company, used for both filtering and new searches)
-const DEFAULT_SEARCH = { tags: [], markets: [], platforms: [], tiers: [], follower_min: null, follower_max: null, deal_types: [], avoid: [], example_creators: [], ai_scout: false, size_preset: "" };
+const DEFAULT_SEARCH = { tags: [], markets: [], platforms: [], tiers: [], follower_min: null, follower_max: null, deal_types: [], avoid: [], example_creators: [], size_preset: "" };
 // ...plus filters that only narrow what's already in the library
 const DEFAULT_FILTERS = { ...DEFAULT_SEARCH, q: "", language: "", min_score: 0, min_eng: 0, views: "", fmt: "", age: "", has_email: false, gems: false, growing: false, show_hidden: false, sort: "match" };
 const S = {
@@ -305,7 +305,6 @@ function renderFilters() {
     (v) => { S.f.deal_types = v; searchChanged({ reload: false }); });
   chipInput($("#c-avoid"), S.f.avoid, "e.g. Gambling, a competitor…", (v) => { S.f.avoid = v; searchChanged({ reload: false }); });
   chipInput($("#c-examples"), S.f.example_creators, "@handle or profile link", (v) => { S.f.example_creators = v; searchChanged({ reload: false }); });
-  $("#c-scout").checked = S.f.ai_scout;
 
   // "More filters": narrowing the results
   $("#f-language").innerHTML = '<option value="">Any language</option>'
@@ -329,9 +328,6 @@ function renderFilters() {
   if (!sources.youtube) missing.push("a YouTube key");
   $("#setup-warning").hidden = !missing.length;
   $("#setup-warning").innerHTML = `<span>Finish setup: add ${missing.join(" and ")}.</span> <button class="btn small" data-act="settings">Open settings</button>`;
-  const scoutOk = S.meta.ai.web_search;
-  $("#c-scout").disabled = !scoutOk;
-  $("#c-scout-note").textContent = scoutOk ? "" : " Needs a Claude key in Settings (as the search or writing AI).";
   renderTry();
 }
 
@@ -2017,7 +2013,6 @@ function bindEvents() {
   $("#f-growing").addEventListener("change", (e) => { S.f.growing = e.target.checked; filtersChanged(); });
   $("#f-gems").addEventListener("change", (e) => { S.f.gems = e.target.checked; filtersChanged(); });
   $("#f-hidden").addEventListener("change", (e) => { S.f.show_hidden = e.target.checked; filtersChanged(); });
-  $("#c-scout").addEventListener("change", (e) => { S.f.ai_scout = e.target.checked; searchChanged({ reload: false }); });
   $("#size-lo").addEventListener("input", () => sizeFromSlider("lo"));
   $("#size-hi").addEventListener("input", () => sizeFromSlider("hi"));
   $("#company-btn").addEventListener("click", (e) => { e.stopPropagation(); toggleCompanyMenu(); });
@@ -2197,7 +2192,7 @@ function bindEvents() {
     }
     else if (act === "reset-filters") {
       // Clear what narrows the list; keep the settings that only affect new searches.
-      const keep = { deal_types: S.f.deal_types, avoid: S.f.avoid, example_creators: S.f.example_creators, ai_scout: S.f.ai_scout, sort: S.f.sort };
+      const keep = { deal_types: S.f.deal_types, avoid: S.f.avoid, example_creators: S.f.example_creators, sort: S.f.sort };
       S.f = { ...DEFAULT_FILTERS, ...keep };
       $("#q").value = "";
       S.sentQuery = "";
