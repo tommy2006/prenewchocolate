@@ -126,6 +126,11 @@ rate and price at a glance, a chart of views and of engagement per recent post a
 column for that post), audience authenticity, comment languages, sponsorship history, and every post as a table. Keyboard: ↑/↓ move
 (also inside the window), Enter open, s shortlist, x select, h not a fit, / search, Esc close.
 
+**Repeating searches.** When a search finishes, *Repeat this search* runs it again by itself every day or every week
+(up to 3 per company, 5 markets each, while Scout runs). They're listed under the search box's recent searches, with
+*Run now* and *Stop*. New creators land in the list, and the best ones (plus any rising star) are posted to **Slack**
+and/or **Microsoft Teams** when a webhook is set in *Settings → Notifications*.
+
 ## Setup (5 minutes)
 
 1. Start Scout, then open http://localhost:8001
