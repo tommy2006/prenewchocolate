@@ -695,7 +695,7 @@ const tipAttr = (kind, c) => `data-tip="${esc(badgeTip(kind, c))}"`;
 function badges(c, { partner = true } = {}) {
   return [
     partner && c.partner ? `<span class="tag partner" ${tipAttr("partner", c)}>🤝 Past partner</span>` : "",
-    c.hidden_gem ? `<span class="tag gem" ${tipAttr("gem", c)}>💎 Gem</span>` : "",
+    c.hidden_gem ? `<span class="tag gem" ${tipAttr("gem", c)}>Hidden gem</span>` : "",
     c.checked === "deep" ? `<span class="tag deep" ${tipAttr("deep", c)}>✦ Evaluated</span>` : "",
   ].join("");
 }
@@ -1119,7 +1119,7 @@ function renderDetail(d) {
           <button class="btn ${starred ? "dark" : "primary"}" data-act="panel-star">${starred ? ICONS.starOn + " On shortlist" : ICONS.star + " Add to shortlist"}</button>
           ${m.status === "hidden" ? `<button class="btn" data-act="panel-unhide">Unhide</button>` : `<button class="btn" data-act="panel-hide">Not a fit ${ICONS.chev}</button>`}
           <button class="btn" data-stats="${esc(c.id)}">${ICONS.chart} See stats</button>
-          <button class="btn" data-act="similar-one" title="Search for creators ${esc(c.name)} mentions or features in their videos">${ICONS.people} Find more like this</button>
+          <button class="btn" data-act="similar-one" title="Creators ${esc(c.name)} mentions or features, plus others making the same games or niche in the same market">${ICONS.people} Find more like this</button>
           <a class="btn" href="${esc(cr.url)}" target="_blank" rel="noopener">${ICONS.ext} Open on ${esc(platform)}</a>
           ${S.meta.sources.ai ? `<button class="btn ${m.checked === "deep" ? "" : "accent"}" data-act="deep" title="Reads their posts, descriptions and viewer comments, and judges fit like a marketer would (uses the writing AI, about a minute)">${ICONS.sparkle} ${m.checked === "deep" ? "Evaluate again" : "Deep evaluation"}</button>` : ""}
         </div>
@@ -1495,13 +1495,6 @@ async function rescoreOne(kind, btn) {
 }
 
 // ---------- Find new creators ----------
-function flagRow(id) {
-  const row = $(id);
-  row.classList.remove("attention");
-  void row.offsetWidth; // restart the animation
-  row.classList.add("attention");
-  setTimeout(() => row.classList.remove("attention"), 1500);
-}
 
 // Searches that start from creators you know, and the tracker lookup: same progress panel as a search.
 async function startSpecialJob(url, body = {}) {
@@ -1556,10 +1549,6 @@ async function startFind() {
     $("#find-btn").disabled = false;
     if (!ok) return;
   }
-  if (!S.f.markets.length) {
-    flagRow("#crit-markets");
-    return toast("Pick at least one market to search in", "err");
-  }
   const wanted = S.f.platforms.length ? S.f.platforms : Object.keys(S.meta.search_platforms);
   const usable = wanted.filter((p) => src[p]);
   if (!usable.length) return toast("YouTube isn't set up yet. Add a YouTube key in Settings, or search TikTok.", "err");
@@ -1610,7 +1599,7 @@ function renderJob() {
   el.hidden = false;
   const running = job.status === "running" || job.status === "queued";
   $("#find-btn").disabled = running;
-  const where = job.markets.map((m) => S.meta.markets[m]?.name || m).join(", ");
+  const where = job.all_markets ? "All markets" : job.markets.map((m) => S.meta.markets[m]?.name || m).join(", ");
   const on = job.platforms.map((p) => S.meta.platforms[p]).join(", ");
   const unscored = job.unscored?.length || 0;
   const current = (job.steps || []).filter((s) => s.status === "running").map((s) => s.label).join(" · ");
@@ -1620,12 +1609,12 @@ function renderJob() {
     : task ? (job.status === "done" ? task.done(job) : job.status === "stopped" ? "Stopped" : "Didn't finish")
     : job.status === "done" ? (job.mode === "tracker" ? `Looked up ${job.partners_found ?? 0} of ${job.partners_total ?? 0} creators from your tracker${quick}`
       : job.mode === "lookalike" ? (job.new ? `Done: ${job.new} creators like ${job.seed_names || "yours"}${quick}`
-        : `Nothing new: ${job.seed_names || "they"} don't mention or feature anyone you don't have yet`)
+        : `Nothing new like ${job.seed_names || "them"}: everyone found is already in your library, or outside your size and market filters`)
       : `Done: ${job.new ?? 0} new creators ranked${quick}`)
     : job.status === "stopped" ? `Stopped: ${job.new ?? 0} creators ranked before you stopped` : "Search stopped";
   const what = task ? `${job.ids?.length ?? 0} creator${job.ids?.length === 1 ? "" : "s"}`
     : job.mode === "tracker" ? "Your collaboration tracker"
-    : job.mode === "lookalike" ? `Creators ${esc(job.seed_names || "you know")} mention or feature · ${esc(where)} · ${esc(on)}`
+    : job.mode === "lookalike" ? `Creators ${esc(job.seed_names || "you know")} mention or feature${job.profile_terms?.length ? `, and others making ${esc(job.profile_terms.join(" or "))}` : ""} · ${esc(where)} · ${esc(on)}`
     : `${esc(where)} · ${esc(on)}${job.tags?.length ? ` · ${esc(job.tags.join(", "))}` : ""}${job.focus ? ` · “${esc(job.focus)}”` : ""}`;
   const open = el.querySelector("details")?.open;
   el.innerHTML = `

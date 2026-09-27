@@ -1017,11 +1017,11 @@ async def start_job(company_id: str, body: JobIn):
     company = _company(company_id)
     platforms = _platforms(body.platforms)
     markets = [m for m in body.markets if m in MARKETS]
-    if not markets:
-        raise HTTPException(400, "Pick at least one market to search in")
+    all_markets = not markets  # "All markets": every market, with a lighter search in each (see pipeline)
+    markets = markets or list(MARKETS)
     _one_at_a_time(company_id)
     company["search"] = SearchIn(**body.model_dump(exclude={"focus"})).model_dump()
-    job = _new_job(company_id, platforms, markets, _size_range(company, body, platforms),
+    job = _new_job(company_id, platforms, markets, _size_range(company, body, platforms), all_markets=all_markets,
                    focus=body.focus.strip(), tags=body.tags, deal_types=body.deal_types, avoid=body.avoid,
                    example_creators=body.example_creators, ai_scout=body.ai_scout)
     _run(job["id"], run_job(job["id"]))
@@ -1062,9 +1062,9 @@ async def find_similar(company_id: str, body: SimilarIn):
     # Same markets as the starting creators; else the markets picked in the search area.
     seed_markets = {(matches.get(cid) or {}).get("country") or store.creators[cid].get("country") for cid in seed_ids}
     markets = sorted(m for m in seed_markets if m in MARKETS) or [m for m in (body.markets or company["search"].get("markets") or []) if m in MARKETS]
-    if not markets:
-        raise HTTPException(400, "Pick at least one market to search in")
-    job = _new_job(company_id, platforms, markets, _size_range(company, body, platforms), mode="lookalike",
+    all_markets = not markets
+    markets = markets or list(MARKETS)
+    job = _new_job(company_id, platforms, markets, _size_range(company, body, platforms), mode="lookalike", all_markets=all_markets,
                    seed_ids=seed_ids, seed_handles=handles, seed_names=label, source=body.source,
                    deal_types=company["search"].get("deal_types") or [], avoid=company["search"].get("avoid") or [])
     _run(job["id"], run_job(job["id"]))

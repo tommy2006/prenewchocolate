@@ -165,6 +165,43 @@ async def _similar(http, job: dict, company: dict, platforms: list[str], size_of
     return await lookalike.expand(http, seeds, platforms, size_of, known)
 
 
+def _profile_plans(job: dict, company: dict, platforms: list[str], markets: list[str]) -> list[dict]:
+    """"Find more like these", second way: search for creators with the same profile as the starting ones (their
+    main games or niche, in their market's language). Mentions alone find nobody for most creators.
+    Kept small: a YouTube search costs 100 quota units."""
+    matched = store.matches.get(company["id"], {})
+    counts: dict[str, int] = {}
+    for cid in job.get("seed_ids", []):
+        c, m = store.creators.get(cid), matched.get(cid) or {}
+        if not c:
+            continue
+        games = m.get("games") or [g for g, _ in rules.games(c)]
+        niche = m.get("niche") or ""
+        terms = games[:2] + ([niche] if niche and niche.lower() not in ("gaming", "") and niche not in games else [])
+        for t in terms or (m.get("tags") or [])[:2]:
+            counts[t] = counts.get(t, 0) + 1
+    terms = sorted(counts, key=counts.get, reverse=True)[:2]
+    if not terms:
+        return []
+    job["profile_terms"] = terms
+    plans = rules.template_plan(company, {"markets": markets, "tags": terms}, platforms)
+    for plan in plans:
+        plan["youtube_queries"] = plan["youtube_queries"][:2]
+        plan["tiktok_queries"] = plan["tiktok_queries"][:2]
+        plan["tiktok_hashtags"] = plan["tiktok_hashtags"][:1]
+    return plans
+
+
+def _lighten(plans: list[dict]) -> list[dict]:
+    """All markets: one YouTube and one TikTok search per market (all of them at full size would use more than
+    YouTube's daily quota), taking turns through the search terms so every creator type is still covered."""
+    for i, plan in enumerate(plans):
+        for key in ("youtube_queries", "tiktok_queries", "tiktok_hashtags"):
+            if plan[key]:
+                plan[key] = [plan[key][i % len(plan[key])]]
+    return plans
+
+
 async def _youtube_seeds(http, queries: list[str], market: str, lang: str) -> list[dict]:
     found = await youtube.discover(http, queries, market, lang, None, None, max_channels=25)
     for c in found:
@@ -214,12 +251,25 @@ async def run_job(job_id: str) -> None:
     similar = job.get("mode") == "lookalike"
     try:
         plans = []
-        if not similar:
+        if similar:
+            plans = _profile_plans(job, company, platforms, markets)
+            if plans and job.get("all_markets"):
+                plans = _lighten(plans)
+            if plans:
+                _step(job, "plan", "Searching for the same profile", "done",
+                      f"{', '.join(job['profile_terms'])} in {', '.join(MARKETS[p['market']]['name'] for p in plans)}")
+                job["plan"] = plans
+        else:
             _step(job, "plan", "Planning local-language searches")
-            plans, how = await _plan(company, {**job, "markets": markets}, platforms, ai)
+            if job.get("all_markets"):  # the AI planning 22 markets takes long, and each gets one search anyway
+                plans, how = _lighten(rules.template_plan(company, {**job, "markets": markets}, platforms)), \
+                    f"all {len(markets)} markets, one search each to stay within the YouTube quota"
+            else:
+                plans, how = await _plan(company, {**job, "markets": markets}, platforms, ai)
             n_queries = sum(len(p["youtube_queries"]) + len(p["tiktok_queries"]) + len(p["tiktok_hashtags"]) for p in plans)
             if "twitch" in platforms:  # live streams in the language, plus a game and a channel search per creator type
-                n_queries += len(plans) * (1 + 2 * len((job.get("tags") or company.get("suggested_tags", []))[:6]))
+                per_market = 1 if job.get("all_markets") else len((job.get("tags") or company.get("suggested_tags", []))[:6])
+                n_queries += len(plans) * (1 + 2 * per_market)
             _step(job, "plan", "Planning local-language searches", "done",
                   f"{n_queries} searches across {len(plans)} markets ({how})")
             job["plan"] = plans
@@ -244,7 +294,9 @@ async def run_job(job_id: str) -> None:
                                                  _youtube_seeds(http, plan["tiktok_queries"][:2], m, lang)))
                 if "twitch" in platforms:
                     # Twitch filters by broadcast language: live streams and channels for each creator type.
-                    terms = job.get("tags") or company.get("suggested_tags", [])[:6]
+                    terms = job.get("profile_terms") or job.get("tags") or company.get("suggested_tags", [])[:6]
+                    if job.get("all_markets"):
+                        terms = [terms[plans.index(plan) % len(terms)]] if terms else []
                     tasks.append(_run_source(job, f"tw_{m}", f"Twitch · {MARKETS[m]['name']}",
                                              twitch.discover(http, terms, m, lang, *size_of("twitch"))))
                 if job.get("ai_scout") and settings.scout_config():

@@ -220,9 +220,6 @@ input[type=range] { accent-color: var(--accent); width: 100%; }
 .fgroup.push { margin-left: auto; }
 .flabel { font-size: 12px; font-weight: 600; color: var(--muted); }
 .fbody { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
-.fgroup.attention .flabel { color: var(--accent); }
-.fgroup.attention .fbody { animation: shake .4s; }
-@keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
 .fbtn {
   height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px 0 11px; border-radius: 8px;
   border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 13px; font-weight: 500;
@@ -1364,3 +1361,9 @@ html[data-theme="dark"] .sk::after { background: linear-gradient(90deg, transpar
 /* Login: the same brand */
 .login-card .brand-name { font-size: 22px; }
 .login-card .login-tag { margin: -6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
+
+/* While a window (creator details, stats, settings...) is open, the page behind it stays put:
+   scrolling past the end of the window doesn't scroll the list underneath. */
+html { scrollbar-gutter: stable; }
+html:has(dialog[open]) { overflow: hidden; }
+dialog { overscroll-behavior: contain; }  /* the window only: on its insides it stops the window scrolling */
