@@ -2,12 +2,14 @@
 import asyncio
 import json
 import logging
+import os
+import re
 
 import httpx
 
-from . import audience, config, contacts, linking, llm, lookalike, metrics, rules, scoring, settings, tracker
+from . import audience, config, contacts, linking, llm, lookalike, metrics, notify, rules, scoring, settings, tracker
 from .images import cache_creator_images
-from .markets import MARKETS
+from .markets import MARKETS, PLATFORMS
 from .sources import tiktok, twitch, youtube
 from .store import now_iso, store
 
@@ -15,6 +17,7 @@ log = logging.getLogger("scout")
 
 ACTIVE_DAYS = 120  # ignore creators who haven't posted in ~4 months
 LINKED_LABEL = "Linked from their other profile"
+ADD_LABEL = "Added from a link"  # pasted or sent by the bookmarklet: not something a search found
 
 
 def _step(job: dict, key: str, label: str, status: str = "running", detail: str = "") -> None:
@@ -310,6 +313,8 @@ async def run_job(job_id: str) -> None:
         await score_pool(job, company, pool, ai)
         await _link_step(job, company)
         job["status"] = "done"
+        if job.get("auto"):
+            await _notify_watch(job, company)
     except asyncio.CancelledError:
         _stopped(job)
     except Exception as e:
@@ -320,6 +325,23 @@ async def run_job(job_id: str) -> None:
         job["finished_at"] = now_iso()
         company["last_job_id"] = job_id
         store.save()
+
+
+async def _notify_watch(job: dict, company: dict) -> None:
+    """A repeating search found new creators: tell the team's chat, if a webhook is set."""
+    if not settings.data_key("notify_webhook"):
+        return
+    matches = store.matches.get(company["id"], {})
+    new = sorted(((store.creators[cid], m) for cid, m in matches.items() if m.get("job_id") == job["id"] and cid in store.creators),
+                 key=lambda cm: -cm[1]["score"])
+    if not new:
+        return
+    watch = next((w for w in company.get("watches", []) if w["id"] == job.get("watch_id")), {})
+    text = notify.summary(watch.get("label") or "a repeating search", new, [cm for cm in new if metrics.rising(*cm)],
+                          os.getenv("SCOUT_PUBLIC_URL", ""))
+    problem = await notify.send(text)
+    if problem:
+        log.info("webhook for job %s: %s", job["id"], problem)
 
 
 async def run_tracker(job_id: str) -> None:
@@ -429,7 +451,7 @@ async def _comments_step(http, job: dict, pool: list[dict]) -> None:
 
 def found_by_search(c: dict) -> bool:
     """Found by one of Scout's own searches, not only looked up from the tracker (or linked from such a profile)."""
-    return any(not v.startswith(tracker.LABEL) and v != LINKED_LABEL for v in c.get("found_via", []))
+    return any(not v.startswith(tracker.LABEL) and v not in (LINKED_LABEL, ADD_LABEL) for v in c.get("found_via", []))
 
 
 def _stopped(job: dict) -> None:
@@ -900,3 +922,71 @@ async def refresh_numbers(job: dict, company: dict) -> None:
     _progress(job, "refresh", REFRESH_LABEL, len(updated), total, "done",
               f"{len(updated)} of {total} updated" + (f"; {missing} not found (renamed, private or no longer active)" if missing else ""))
     store.save()
+
+
+# --- One creator from a link (pasted in the search box, or sent by the "Scout this creator" bookmarklet) -------
+
+VIDEO_ID = re.compile(r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/)|youtu\.be/)([\w-]{6,})")
+
+
+def parse_profile_link(text: str) -> tuple[str, str] | None:
+    """("youtube", "@name" | "UC..." | "video:ID"), ("tiktok", "name") or ("twitch", "login"), from a link."""
+    t = (text or "").strip()
+    if not re.match(r"https?://", t) and re.match(r"(www\.|m\.)?(youtube\.com|youtu\.be|tiktok\.com|twitch\.tv)/", t):
+        t = "https://" + t
+    video = VIDEO_ID.search(t)
+    if video:
+        return "youtube", "video:" + video.group(1)
+    for network in ("youtube", "tiktok", "twitch"):
+        key = linking.url_key(network, t)
+        if key:
+            return network, linking.lookup_handle(key)
+    return None
+
+
+async def _fetch_one(http, network: str, handle: str) -> dict | None:
+    if network == "youtube":
+        if handle.startswith("video:"):
+            items = (await youtube._get(http, "videos", part="snippet", id=handle[6:])).get("items", [])
+            handle = items[0]["snippet"]["channelId"] if items else ""
+        if handle.startswith("UC"):
+            channels = await youtube.fetch_channels(http, [handle])
+        else:
+            channel = await youtube.channel_by_handle(http, handle) if handle else None
+            channels = [channel] if channel else []
+        found = await youtube.build(http, channels, {ch["id"]: ADD_LABEL for ch in channels})
+    elif network == "tiktok":
+        found = await tiktok.lookup_handles(http, [handle], ADD_LABEL)
+    else:
+        found = await twitch.lookup_logins(http, [handle], ADD_LABEL)
+    return found[0] if found else None
+
+
+async def add_from_link(job: dict, company: dict) -> None:
+    """Look up the creator a link points to and score them like a search result (the team asked for them, so
+    they stay in the list whatever their market). job["creator_id"] tells the UI whom to open."""
+    network, handle = job["link"]
+    if not settings.source_status().get(network):
+        raise ValueError(f"{PLATFORMS[network]} isn't set up yet: add its key in Settings")
+    label = f"Looking up {PLATFORMS[network]} {handle.removeprefix('video:')}"
+    _step(job, "lookup", label)
+    async with httpx.AsyncClient() as http:
+        c = await _fetch_one(http, network, handle)
+        if not c:
+            raise ValueError("No public profile found for that link")
+        if c["id"] in store.matches.get(company["id"], {}) and c["id"] in store.creators:
+            job["creator_id"], job["new"] = c["id"], 0
+            _step(job, "lookup", label, "done", "already in your list")
+            return
+        metrics.compute(c)
+        _step(job, "lookup", label, "done", f"{c.get('name')}: {c.get('followers') or 0:,} followers")
+        await cache_creator_images(http, c, asyncio.Semaphore(6))
+        await _contacts_step(http, job, [c])
+        await _comments_step(http, job, [c])
+    audience.assess(c)
+    c["found_via"] = sorted(set((store.creators.get(c["id"]) or {}).get("found_via", []) + [ADD_LABEL]))
+    c["fetched_at"] = now_iso()
+    store.creators[c["id"]] = c
+    job["keep_all"] = True
+    await score_pool(job, company, [c], settings.ai_config())
+    job["creator_id"] = c["id"]

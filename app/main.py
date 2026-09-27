@@ -13,15 +13,15 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (audience, auth, config, export as exporter, likeness, linking, llm, localai, partners, planner, query,
-               rules, scoring, settings, tracker)
+from . import (audience, auth, config, export as exporter, likeness, linking, llm, localai, marketmap, notify, partners,
+               planner, query, rules, scoring, settings, tracker)
 from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
-from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint, content_format, in_range
+from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint, content_format, in_range, rising
 from .sources import twitch, youtube
-from .pipeline import (LINKED_LABEL, check_limit, draft_pitches, fetch_linked, find_contacts, found_by_search, merge_ai,
-                       rebuild, refresh_numbers, rescore_company, retry_scoring, run_job, run_task, run_tracker,
-                       search_of, upgrade_library)
+from .pipeline import (LINKED_LABEL, add_from_link, check_limit, draft_pitches, fetch_linked, find_contacts, found_by_search,
+                       merge_ai, parse_profile_link, rebuild, refresh_numbers, rescore_company, retry_scoring, run_job,
+                       run_task, run_tracker, search_of, upgrade_library)
 from .store import DEFAULT_PROFILE, DEFAULT_SEARCH, GOALS, new_id, now_iso, store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -417,6 +417,7 @@ def card(company: dict, c: dict, m: dict, partner_idx: dict | None = None, model
         "has_email": bool(c.get("emails")),
         "email": (c.get("emails") or [None])[0],
         "has_pitch": bool(m.get("pitch")),
+        "rising": rising(c, m),
         # No email: where a message can still reach them.
         "contact_via": "" if c.get("emails") else ("Instagram DM" if (c.get("socials") or {}).get("instagram") or c["platform"] == "instagram"
                                                   else "TikTok DM" if c["platform"] == "tiktok" or (c.get("socials") or {}).get("tiktok")
@@ -467,6 +468,7 @@ class Filters(BaseModel):
     usual: bool = False  # the company's usual size per platform instead of the slider
     vmin: int = 0  # typical (median) views per post from..to (0 = no limit)
     vmax: int = 0
+    rising: bool = False  # views up 50%+ in the last 30 days, and a good fit
     fmt: str = ""  # "long" | "short" | "live": what they mostly make
     age: str = ""  # "no_kids" | "adult": the likely audience age (game age ratings, what commenters say)
     job: str = ""  # show exactly what one search found, ignoring the other filters
@@ -528,6 +530,8 @@ def _rows(company_id: str, f: Filters) -> list[tuple[dict, dict]]:
         if m["score"] < f.min_score or (c.get("engagement_score") or 0) < f.min_eng:
             continue
         if f.has_email and not c.get("emails"):
+            continue
+        if f.rising and not rising(c, m):
             continue
         if f.fmt and content_format(c) != f.fmt:
             continue
@@ -857,6 +861,13 @@ async def plan_campaign(company_id: str, f: Annotated[Filters, Depends()], body:
     return planner.plan(_rows(company_id, f), store.creators, body.budget, goal, max(1, min(body.max_creators, 50)),
                         body.need_email, max(0, min(body.min_fit, 100)), lambda c, m: bool(partners.find(idx, c, m)),
                         body.new_only)
+
+
+@app.get("/api/companies/{company_id}/market-map")
+async def market_map(company_id: str):
+    """Per market: creators by size, gems, past partners, emails, typical views and price, games, best matches."""
+    company = _company(company_id)
+    return marketmap.build(company, store.creators, store.matches.get(company_id, {}))
 
 
 @app.get("/api/companies/{company_id}/partner-profile")
@@ -1221,6 +1232,24 @@ def _start_task(company_id: str, mode: str, work, body: ForCreatorsIn) -> dict:
     return job
 
 
+class LinkIn(BaseModel):
+    url: str
+
+
+@app.post("/api/companies/{company_id}/add-creator")
+async def add_creator(company_id: str, body: LinkIn):
+    """A creator from a YouTube, TikTok or Twitch link (a profile or one of their videos): looked up and scored."""
+    company = _company(company_id)
+    link = parse_profile_link(body.url)
+    if not link:
+        raise HTTPException(400, "Paste a YouTube, TikTok or Twitch link to a creator's profile or one of their videos")
+    _one_at_a_time(company_id)
+    markets = [m for m in (company.get("search") or {}).get("markets", []) if m in MARKETS]
+    job = _new_job(company_id, [link[0]], markets, (None, None, {}), mode="add", link=list(link))
+    _run(job["id"], run_task(job["id"], add_from_link))
+    return job
+
+
 @app.post("/api/companies/{company_id}/find-contacts")
 async def start_find_contacts(company_id: str, body: ForCreatorsIn):
     """Look for emails on the link pages, websites and YouTube channel links of creators without one."""
@@ -1310,6 +1339,8 @@ class SettingsIn(BaseModel):
     clear_twitch_client_id: bool = False
     twitch_client_secret: str | None = None
     clear_twitch_client_secret: bool = False
+    notify_webhook: str | None = None
+    clear_notify_webhook: bool = False
 
 
 @app.get("/api/settings")
@@ -1332,7 +1363,7 @@ async def put_settings(body: SettingsIn):
 
 
 class TestIn(BaseModel):
-    target: str  # "ai" | "youtube" | "twitch"
+    target: str  # "ai" | "youtube" | "twitch" | "webhook"
     provider: str | None = None
     api_key: str | None = None
     model: str | None = None
@@ -1341,6 +1372,7 @@ class TestIn(BaseModel):
     youtube_api_key: str | None = None
     twitch_client_id: str | None = None
     twitch_client_secret: str | None = None
+    notify_webhook: str | None = None
 
 
 def _ai_overrides(body: "TestIn") -> dict:
@@ -1377,6 +1409,10 @@ async def test_settings(body: TestIn):
             if not client_id or not secret:
                 return {"ok": False, "message": "Add both the Client ID and the Client Secret"}
             return {"ok": True, "message": await twitch.check(client_id, secret)}
+        if body.target == "webhook":
+            problem = await notify.send("Scout is connected: new creators from repeating searches will be posted here.",
+                                        body.notify_webhook or None)
+            return {"ok": not problem, "message": problem or "Sent a test message"}
     except (llm.LLMError, CheckError, twitch.TwitchError) as e:
         return {"ok": False, "message": str(e)}
     raise HTTPException(400, "Unknown test")

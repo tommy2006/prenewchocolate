@@ -69,6 +69,7 @@ DATA_KEYS = {
     "youtube_api_key": {"env": "YOUTUBE_API_KEY"},
     "twitch_client_id": {"env": "TWITCH_CLIENT_ID"},
     "twitch_client_secret": {"env": "TWITCH_CLIENT_SECRET"},
+    "notify_webhook": {"env": "NOTIFY_WEBHOOK_URL"},  # Slack/Teams/Discord: new creators from repeating searches
 }
 
 
@@ -238,6 +239,7 @@ def public() -> dict:
         "youtube_key_hint": _mask(data_key("youtube_api_key", data)),
         "twitch_id_hint": _mask(data_key("twitch_client_id", data)),
         "twitch_secret_hint": _mask(data_key("twitch_client_secret", data)),
+        "notify_webhook_hint": _mask(data_key("notify_webhook", data)),
     }
 
 

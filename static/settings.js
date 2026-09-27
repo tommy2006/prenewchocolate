@@ -49,6 +49,17 @@ async function openSettings() {
             <small>Free: dev.twitch.tv → Your Console → Register Your Application (any name, OAuth redirect http://localhost, category Other) → copy the Client ID and create a Client Secret. Adds Twitch to searches, with its language filter for small markets.</small>
           </div>
         </section>
+        <section class="set-section">
+          <h3>Notifications <em class="opt">optional</em></h3>
+          <div class="field"><span>Team chat webhook</span>
+            <div class="key-row">
+              <input type="password" id="webhook-url" autocomplete="off" placeholder="${st.notify_webhook_hint ? `Saved (${esc(st.notify_webhook_hint)}). Paste a new one to replace it` : "https://hooks.slack.com/services/…"}">
+              <button type="button" class="btn small" data-act="test-webhook">Send a test</button>
+            </div>
+            <span class="test-msg" id="webhook-msg"></span>
+            <small>A Slack, Teams or Discord incoming webhook. When a repeating search finds new creators, Scout posts the best ones (and any rising star) there.</small>
+          </div>
+        </section>
       </div>
       <div class="dlg-foot">
         <span class="spacer"></span>
@@ -323,6 +334,13 @@ async function openSettings() {
       if (b) b.disabled = false;
     } else if (act === "test-ai") {
       await runTest();
+    } else if (act === "test-webhook") {
+      btn.disabled = true;
+      const msg = $("#webhook-msg");
+      msg.className = "test-msg"; msg.textContent = "Sending…";
+      try { showResult(msg, await api("/api/settings/test", { method: "POST", body: { target: "webhook", notify_webhook: $("#webhook-url").value.trim() || null } })); }
+      catch (err) { showResult(msg, { ok: false, message: err.message }); }
+      finally { btn.disabled = false; }
     } else if (act === "test-youtube" || act === "test-twitch") {
       const which = act.slice(5);
       btn.disabled = true;
@@ -349,6 +367,7 @@ async function openSettings() {
       youtube_api_key: $("#youtube-key").value.trim() || null,
       twitch_client_id: $("#twitch-id").value.trim() || null,
       twitch_client_secret: $("#twitch-secret").value.trim() || null,
+      notify_webhook: $("#webhook-url").value.trim() || null,
     };
     try {
       await api("/api/settings", { method: "PUT", body });

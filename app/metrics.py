@@ -270,6 +270,11 @@ def content_format(creator: dict) -> str:
     return "short" if share is not None and share >= 0.6 else "long"
 
 
+def rising(creator: dict, match: dict) -> bool:
+    """A rising star: views up at least 50% in the last 30 days (vs the 60 before), and a good fit."""
+    return (creator.get("views_trend") or 0) >= 0.5 and (match.get("fit") or 0) >= 60
+
+
 def prescore(creator: dict) -> float:
     """Cheap ranking used to decide who is worth sending to the AI."""
     return 0.6 * creator.get("engagement_score", 40) + 0.4 * creator.get("activity_score", 30)

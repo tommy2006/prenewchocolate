@@ -24,3 +24,25 @@
   .planner .plan-form, .planner .plan-tiles { grid-template-columns: 1fr 1fr; }
   .planner .c-hide-sm { display: none; }
 }
+
+/* Market map and Add a creator (static/tools.js) */
+.dlg.tools#market-map { width: min(1060px, calc(100vw - 32px)); }
+.dlg.tools#add-creator { width: min(600px, calc(100vw - 32px)); }
+.tools .map-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tools .map-table th, .tools .map-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.tools .map-table th { font-size: 12px; color: var(--muted); font-weight: 600; }
+.tools .map-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tools .map-table tbody tr[data-map-market] { cursor: pointer; }
+.tools .map-table tbody tr[data-map-market]:hover { background: var(--sel); }
+.tools .map-bar { display: block; height: 4px; margin-top: 4px; border-radius: 99px; background: var(--surface-2); }
+.tools .map-bar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+.tools .map-sizes { display: flex; flex-wrap: wrap; gap: 4px; }
+.tools .map-sizes span { font-size: 11.5px; padding: 1px 7px; border-radius: 99px; background: var(--surface-2); white-space: nowrap; }
+.tools .add-row { display: flex; gap: 8px; }
+.tools .add-row input { flex: 1; min-width: 0; height: 42px; padding: 0 16px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface-2); color: var(--text); font: inherit; }
+.tools .add-row input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.tools .add-tip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--muted); }
+.tools .bookmarklet { cursor: grab; }
+#map-btn, #add-btn { white-space: nowrap; }
+@media (max-width: 640px) { .tools .map-table th:nth-child(n+7), .tools .map-table td:nth-child(n+7) { display: none; } }
