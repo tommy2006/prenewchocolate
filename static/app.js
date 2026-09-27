@@ -1083,12 +1083,18 @@ function renderDetail(d) {
   // The summary: the strongest reasons for, the concerns, and what hasn't been checked yet.
   const x = d.explain || { parts: {}, qparts: {} };
   const qn = Object.values(d.quality_notes || {});
-  // The same claim can back several score parts: list it once.
-  const pros = [...new Set(ev.filter((e) => e.sign === "+")
+  // The same claim can back several score parts, sometimes with a clause added: list it once, in its longest form.
+  const onceEach = (lines) => lines.reduce((out, t) => {
+    const i = out.findIndex((o) => o.startsWith(t) || t.startsWith(o));
+    if (i < 0) out.push(t);
+    else if (t.length > out[i].length) out[i] = t;
+    return out;
+  }, []);
+  const pros = onceEach(ev.filter((e) => e.sign === "+")
     .sort((a, b) => (b.src === "ai") - (a.src === "ai") || DIM_ORDER.indexOf(a.dim) - DIM_ORDER.indexOf(b.dim))
-    .map((e) => e.text).concat(qn.filter((n) => n.sign === "+").map((n) => n.text)))].slice(0, 3);
-  const cons = [...new Set(ev.filter((e) => e.sign === "-").map((e) => e.text)
-    .concat(qn.filter((n) => n.sign === "-").map((n) => n.text)))].slice(0, 4);
+    .map((e) => e.text).concat(qn.filter((n) => n.sign === "+").map((n) => n.text))).slice(0, 3);
+  const cons = onceEach(ev.filter((e) => e.sign === "-").map((e) => e.text)
+    .concat(qn.filter((n) => n.sign === "-").map((n) => n.text))).slice(0, 4);
   const unchecked = conf.notes.slice(0, cons.length ? 1 : 2);  // no concerns found can also mean: not looked yet
   const firstEmail = cr.emails?.[0];
 
