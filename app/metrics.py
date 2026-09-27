@@ -259,6 +259,17 @@ def compute_stats(creator: dict) -> dict:
     return creator
 
 
+def content_format(creator: dict) -> str:
+    """What they mostly make: "long" videos, "short" ones (Shorts, TikTok, Reels) or "live" streams."""
+    platform = creator["platform"]
+    if platform == "twitch":
+        return "live"
+    if platform in ("tiktok", "instagram"):
+        return "short"
+    share = creator.get("shorts_share")
+    return "short" if share is not None and share >= 0.6 else "long"
+
+
 def prescore(creator: dict) -> float:
     """Cheap ranking used to decide who is worth sending to the AI."""
     return 0.6 * creator.get("engagement_score", 40) + 0.4 * creator.get("activity_score", 30)

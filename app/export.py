@@ -17,13 +17,15 @@ TRACKER_COLUMNS = [
     ("YT views / video", 12), ("TikTok followers", 12), ("TikTok views / video", 12),
 ]
 EXTRA_COLUMNS = [
-    ("Instagram followers", 12), ("Twitch followers", 12), ("Email", 30), ("YouTube", 34), ("TikTok", 34), ("Instagram", 34),
-    ("Twitch", 30),
+    ("Instagram followers", 12), ("Twitch followers", 12), ("Email", 30), ("Contact via", 26), ("YouTube", 34),
+    ("TikTok", 34), ("Instagram", 34), ("Twitch", 30),
     ("Other links", 40), ("Match score", 9), ("Fit", 7), ("Audience quality", 9), ("Confidence", 11),
     ("Authenticity", 10), ("Est. price per post (EUR)", 14), ("Views counted over", 20), ("Views trend", 10),
     ("Engagement vs typical", 12), ("Last post (days ago)", 10), ("Risks / red flags", 44),
-    ("Why they fit", 60), ("Verdict", 60), ("Summary", 60), ("Status", 11), ("Past collaborations", 22),
+    ("Why they fit", 60), ("Verdict", 60), ("Summary", 60), ("Collaboration idea", 50), ("Message subject", 32),
+    ("First message", 80), ("Short DM", 50), ("Status", 11), ("Past collaborations", 22),
 ]
+WRAP_COLS = {"First message", "Short DM", "Collaboration idea", "Why they fit", "Verdict", "Summary", "Risks / red flags"}
 COLUMNS = TRACKER_COLUMNS + EXTRA_COLUMNS
 NUMBER_COLS = {"YT subscribers", "TikTok followers", "Instagram followers", "Twitch followers"}
 VIEWS_COLS = {"YT views / video", "TikTok views / video"}
@@ -59,9 +61,28 @@ ABOUT = [
                      "watching, real conversation in comments), lowered by signals such as few followers watching, likes "
                      "far above typical, many likes but no comments, or generic/copy-paste comments. Capped when there is "
                      "little data. Signals, not proof."),
-    ("Est. price per post", "A rough range: median views × common rates per 1,000 views (YouTube €15-30, TikTok €8-18). "
-                            "Check with the creator."),
+    ("Est. price per post", "A rough range: median views × common rates per 1,000 views (YouTube €15-30, TikTok €8-18); "
+                            "Instagram: followers × €5-15 per 1,000. Check with the creator."),
+    ("Contact via", "The quickest way to reach them: their email (and where Scout found it: bio, video descriptions, "
+                    "their link page or website), or a direct message on the platform when there's no public email."),
+    ("First message / Short DM", "Drafted by the AI in the creator's own language (Draft messages on the Shortlist). "
+                                 "The short DM fits an Instagram or TikTok inbox. Read them before sending."),
+    ("Collaboration idea", "One concrete idea that fits this creator's format, from the deep evaluation or the drafted message."),
 ]
+
+
+def _contact_via(ordered: list[dict], emails: list[str], agency: bool, socials: dict) -> str:
+    if emails:
+        source = next((p.get("email_sources", {}).get(emails[0]) for p in ordered if p.get("email_sources", {}).get(emails[0])), "")
+        return ("Email (agency)" if agency else "Email") + (f", found on {source}" if source else "")
+    platforms = [p["platform"] for p in ordered]
+    if "instagram" in platforms or socials.get("instagram"):
+        return "Instagram DM"
+    if "tiktok" in platforms or socials.get("tiktok"):
+        return "TikTok DM"
+    if "twitch" in platforms:
+        return "Twitch whisper or Discord"
+    return "No public contact: YouTube channel only"
 
 
 def _short_name(name: str) -> str:
@@ -110,6 +131,7 @@ def _row(primary: dict, m: dict, profs: dict[str, dict], partner: dict | None, e
     last = [p["days_since_last_post"] for p in ordered if p.get("days_since_last_post") is not None]
     agency = (partner or {}).get("agency") or any(agency_hint(p) for p in ordered)
     weeks = (partner or {}).get("weeks") or []
+    pitch = m.get("pitch") or next((mm.get("pitch") for mm in extra_matches if mm.get("pitch")), None) or {}
 
     def url(profile, network):  # a profile we fetched, else the link they gave
         return (profile or {}).get("url") or socials.get(network, "")
@@ -131,6 +153,7 @@ def _row(primary: dict, m: dict, profs: dict[str, dict], partner: dict | None, e
         "Instagram followers": (ig or {}).get("followers"),
         "Twitch followers": (tw or {}).get("followers"),
         "Email": "; ".join(emails),
+        "Contact via": _contact_via(ordered, emails, bool(agency), socials),
         "YouTube": url(yt, "youtube"),
         "TikTok": url(tt, "tiktok"),
         "Instagram": url(ig, "instagram"),
@@ -150,6 +173,10 @@ def _row(primary: dict, m: dict, profs: dict[str, dict], partner: dict | None, e
         "Why they fit": " | ".join(m.get("why", [])),
         "Verdict": m.get("verdict") or "",
         "Summary": m.get("summary") or "",
+        "Collaboration idea": m.get("collab_idea") or pitch.get("idea") or "",
+        "Message subject": pitch.get("subject") or "",
+        "First message": pitch.get("message") or "",
+        "Short DM": pitch.get("dm") or "",
         "Status": m.get("status") or "",
         "Past collaborations": ", ".join(weeks) or ("yes" if partner else ""),
     }
@@ -213,6 +240,8 @@ def to_xlsx(people: list[dict]) -> bytes:
             elif name in URL_COLS:
                 cell.hyperlink = cell.value
                 cell.font = Font(color="1D4ED8", underline="single")
+            elif name in WRAP_COLS:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
     ws.freeze_panes = "B2"
     ws.auto_filter.ref = ws.dimensions
     ws.row_dimensions[1].height = 32

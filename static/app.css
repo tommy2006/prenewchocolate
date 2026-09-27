@@ -669,6 +669,13 @@ th.num { text-align: right; }
   background: var(--surface); resize: vertical; line-height: 1.5;
 }
 .pitch .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.pitch .dm { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.pitch .dm textarea { min-height: 76px; }
+.pitch-idea { margin: 2px 0 0; }
+.numbers-age { margin: 10px 0 0; }
+.numbers-age .btn.link { padding: 0; font-size: inherit; }
+.list-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
+.drafted { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; color: var(--good-ink); white-space: nowrap; }
 .via { font-size: 12px; color: var(--muted); margin: 0; }
 .loading-line { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13.5px; padding: 4px 0; }
 

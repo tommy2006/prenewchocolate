@@ -7,7 +7,7 @@ from typing import Annotated
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -15,10 +15,11 @@ from . import (audience, auth, config, export as exporter, linking, llm, localai
                settings, tracker)
 from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
-from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint, in_range
+from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint, content_format, in_range
 from .sources import twitch, youtube
-from .pipeline import (LINKED_LABEL, check_limit, fetch_linked, merge_ai, rebuild, rescore_company, retry_scoring,
-                       run_job, run_tracker, search_of, upgrade_library)
+from .pipeline import (LINKED_LABEL, check_limit, draft_pitches, fetch_linked, find_contacts, merge_ai, rebuild,
+                       refresh_numbers, rescore_company, retry_scoring, run_job, run_task, run_tracker, search_of,
+                       upgrade_library)
 from .store import DEFAULT_PROFILE, DEFAULT_SEARCH, GOALS, new_id, now_iso, store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -28,6 +29,7 @@ app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 app.mount("/img", StaticFiles(directory=config.IMG_DIR), name="img")
 _tasks: dict[str, asyncio.Task] = {}  # job id -> the running search, so it can be stopped
 upgrade_library()  # creators saved by older versions get the new audience metrics and scores
+auth.admin_token()  # created at start, so scripts on the server can use the API right away
 
 
 def _run(job_id: str, coro) -> None:
@@ -64,7 +66,11 @@ async def require_login(request: Request, call_next):
     if path.startswith("/static/") or path in PUBLIC_PATHS:
         return await call_next(request)
     if auth.enabled():
-        if auth.valid_session(request.cookies.get(auth.COOKIE)):
+        if path == "/" and request.query_params.get("pass"):  # a shareable link for judges: /?pass=...
+            if auth.check_password(request.query_params["pass"]):
+                return _logged_in(request, RedirectResponse("/", status_code=303, headers=NO_STORE))
+            await asyncio.sleep(1)
+        if auth.valid_session(request.cookies.get(auth.COOKIE)) or auth.is_admin(request):
             return await call_next(request)
         if path.startswith("/api/"):
             return JSONResponse({"detail": "Log in to Scout first"}, status_code=401, headers=NO_STORE)
@@ -90,7 +96,11 @@ async def login(body: LoginIn, request: Request):
     if not auth.check_password(body.password):
         await asyncio.sleep(1)  # slows down guessing
         raise HTTPException(401, "Wrong password")
-    response = JSONResponse({"ok": True})
+    return _logged_in(request, JSONResponse({"ok": True}))
+
+
+def _logged_in(request: Request, response: Response) -> Response:
+    """Give this browser the login cookie (30 days)."""
     https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     response.set_cookie(auth.COOKIE, auth.new_session(), max_age=auth.MAX_AGE, path="/", httponly=True,
                         samesite="lax", secure=https)
@@ -395,6 +405,11 @@ def card(company: dict, c: dict, m: dict, partner_idx: dict | None = None) -> di
         "status": m.get("status"),
         "has_email": bool(c.get("emails")),
         "email": (c.get("emails") or [None])[0],
+        "has_pitch": bool(m.get("pitch")),
+        # No email: where a message can still reach them.
+        "contact_via": "" if c.get("emails") else ("Instagram DM" if (c.get("socials") or {}).get("instagram") or c["platform"] == "instagram"
+                                                  else "TikTok DM" if c["platform"] == "tiktok" or (c.get("socials") or {}).get("tiktok")
+                                                  else "Twitch or Discord" if c["platform"] == "twitch" else "No public contact"),
         "url": c.get("url"),
         "engagement_rate": c.get("engagement_rate"),
         "engagement_vs_typical": c.get("engagement_vs_typical"),
@@ -439,6 +454,8 @@ class Filters(BaseModel):
     usual: bool = False  # the company's usual size per platform instead of the slider
     vmin: int = 0  # typical (median) views per post from..to (0 = no limit)
     vmax: int = 0
+    fmt: str = ""  # "long" | "short" | "live": what they mostly make
+    age: str = ""  # "no_kids" | "adult": the likely audience age (game age ratings, what commenters say)
     job: str = ""  # show exactly what one search found, ignoring the other filters
     ids: str = ""  # exactly these creators (the bulk selection), ignoring the other filters
 
@@ -475,6 +492,8 @@ def _rows(company_id: str, f: Filters) -> list[tuple[dict, dict]]:
         if tiers_f and c.get("tier") not in tiers_f:
             continue
         followers = c.get("followers") or 0
+        if followers < config.MIN_FOLLOWERS:  # too small to work with, whatever the size filter says
+            continue
         if f.usual:
             rng = usual_range(company, c["platform"])
             if rng and not in_range(followers, *rng):
@@ -497,6 +516,12 @@ def _rows(company_id: str, f: Filters) -> list[tuple[dict, dict]]:
             continue
         if f.has_email and not c.get("emails"):
             continue
+        if f.fmt and content_format(c) != f.fmt:
+            continue
+        if f.age:
+            band = rules.age_estimate(c)["band"]
+            if (f.age == "no_kids" and band == "young") or (f.age == "adult" and band != "older"):
+                continue
         if f.gems and not m.get("hidden_gem"):
             continue
         if f.growing and (c.get("views_trend") is None or c["views_trend"] < 0.2):
@@ -1011,6 +1036,56 @@ async def export_tracker(company_id: str):
     name = re.sub(r"[^\w.-]+", "_", (company["partners"].get("file") or "tracker.xlsx").rsplit(".", 1)[0])
     return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="{name}_completed_by_Scout.xlsx"'})
+
+
+class ForCreatorsIn(BaseModel):
+    """Which creators a job works on: `ids`, or everyone on the shortlist or in the library."""
+    ids: list[str] = []
+    scope: str = ""  # "shortlist" | "all" | "" (= ids)
+    redo: bool = False  # messages: rewrite the ones already drafted too
+
+
+def _creator_ids(company_id: str, body: ForCreatorsIn) -> list[str]:
+    matches = store.matches.get(company_id, {})
+    if body.scope == "all":
+        ids = [cid for cid, m in matches.items() if m.get("status") != "hidden"]
+    elif body.scope == "shortlist":
+        ids = [cid for cid, m in matches.items() if m.get("status") in SHORTLIST_STATUSES]
+    else:
+        ids = [cid for cid in dict.fromkeys(body.ids) if cid in matches]
+    ids = [cid for cid in ids if cid in store.creators][:500]
+    if not ids:
+        raise HTTPException(400, "Pick at least one creator (or add some to the shortlist)")
+    return ids
+
+
+def _start_task(company_id: str, mode: str, work, body: ForCreatorsIn) -> dict:
+    _company(company_id)
+    ids = _creator_ids(company_id, body)
+    _one_at_a_time(company_id)
+    job = _new_job(company_id, [], [], (None, None, {}), mode=mode, ids=ids, redo=body.redo)
+    _run(job["id"], run_task(job["id"], work))
+    return job
+
+
+@app.post("/api/companies/{company_id}/find-contacts")
+async def start_find_contacts(company_id: str, body: ForCreatorsIn):
+    """Look for emails on the link pages, websites and YouTube channel links of creators without one."""
+    return _start_task(company_id, "contacts", find_contacts, body)
+
+
+@app.post("/api/companies/{company_id}/pitches")
+async def start_pitches(company_id: str, body: ForCreatorsIn):
+    """Draft a first message (email and short DM, in their language) for each creator that has none yet."""
+    if not settings.source_status()["ai"]:
+        raise HTTPException(400, "No AI is set up yet. Open Settings.")
+    return _start_task(company_id, "pitches", draft_pitches, body)
+
+
+@app.post("/api/companies/{company_id}/refresh")
+async def start_refresh(company_id: str, body: ForCreatorsIn):
+    """Fetch today's followers, views and posts again; the AI's judgement is kept."""
+    return _start_task(company_id, "refresh", refresh_numbers, body)
 
 
 @app.post("/api/jobs/{job_id}/retry-scoring")

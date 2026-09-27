@@ -900,9 +900,11 @@ async def profile_from_website(url: str, name: str = "") -> dict:
 
 PITCH_SYSTEM = """You write first-contact outreach messages from a brand to a social media creator.
 
-Keep it short (90 to 140 words), warm and specific, with no hype and at most one emoji. Mention one or two concrete pieces of their recent content by topic. State one clear collaboration idea using the brand's collaboration types, and end with a simple question. Write the message in the creator's own language, and sign it as "<brand name> team". Also give a short email subject line and an English translation of the message."""
+Keep it short (90 to 140 words), warm and specific, with no hype and at most one emoji. Mention one or two concrete pieces of their recent content by topic. State one clear collaboration idea using the brand's collaboration types, and end with a simple question. Write the message in the creator's own language, and sign it as "<brand name> team". Also give a short email subject line and an English translation of the message.
 
-PITCH_SCHEMA = _obj({"language": STR, "subject": STR, "message": STR, "english": STR})
+Also write "dm": the same approach as a direct message for their Instagram or TikTok inbox, in their language: at most 280 characters, no subject, no signature block, one concrete detail about their content and the question. And "idea": the collaboration idea in one short English sentence, for the marketing team's list."""
+
+PITCH_SCHEMA = _obj({"language": STR, "subject": STR, "message": STR, "english": STR, "dm": STR, "idea": STR})
 
 
 async def draft_pitch(company: dict, search: dict, creator: dict, match: dict) -> dict:

@@ -33,17 +33,28 @@ STOPWORDS = {
     "et": "ja on ei see et ma sa oli väga aitäh kas mis nii ka aga tore".split(),
     "lv": "un ir ne es tu ka kā ar uz paldies ļoti bet arī jā".split(),
     "lt": "ir ne aš tu kad kaip su labai ačiū bet taip jau yra".split(),
+    "sk": "je to na sa že ako čo ale veľmi ďakujem som tiež tak už nie mám".split(),
+    "sl": "je in da se na ne za pa kot tudi zelo hvala sem ali lahko".split(),
+    "hr": "je i da se na ne za što kako ali jako hvala sam ili može".split(),
+    "ro": "și este nu că pe cu pentru mai foarte mulțumesc dar sunt asta ce".split(),
+    "bg": "и е не да на се че за много благодаря но това как".split(),
+    "el": "και είναι δεν το να με για πολύ ευχαριστώ αλλά αυτό που".split(),
+    "is": "og er ekki að það sem þetta fyrir takk mjög ég þú".split(),
 }
 _WORDS = {lang: set(words) for lang, words in STOPWORDS.items()}
 # Letters only some languages use: exclusive ones count more.
 LETTERS = {
     "õ": ("et", "pt"), "ą": ("pl", "lt"), "ę": ("pl", "lt"), "ł": ("pl",), "ś": ("pl",), "ź": ("pl",), "ż": ("pl",),
-    "ć": ("pl",), "ń": ("pl",), "ř": ("cs",), "ě": ("cs",), "ů": ("cs",), "ő": ("hu",), "ű": ("hu",),
-    "ā": ("lv",), "ē": ("lv",), "ī": ("lv",), "ģ": ("lv",), "ķ": ("lv",), "ļ": ("lv",), "ņ": ("lv",),
+    "ć": ("pl", "hr"), "ń": ("pl",), "ř": ("cs",), "ě": ("cs",), "ů": ("cs",), "ő": ("hu",), "ű": ("hu",),
+    "ā": ("lv",), "ē": ("lv",), "ī": ("lv",), "ģ": ("lv",), "ķ": ("lv",), "ļ": ("lv", "sk"), "ņ": ("lv",),
     "ė": ("lt",), "į": ("lt",), "ų": ("lt",), "ß": ("de",), "ñ": ("es",), "ã": ("pt",),
-    "å": ("sv", "no", "da"), "ø": ("no", "da"), "æ": ("no", "da"), "ä": ("fi", "sv", "de", "et"),
-    "ö": ("fi", "sv", "de", "et", "hu"),
+    "å": ("sv", "no", "da"), "ø": ("no", "da"), "æ": ("no", "da", "is"), "ä": ("fi", "sv", "de", "et", "sk"),
+    "ö": ("fi", "sv", "de", "et", "hu", "is"), "ľ": ("sk",), "ĺ": ("sk",), "ŕ": ("sk",), "ô": ("sk",), "ď": ("sk", "cs"),
+    "đ": ("hr",), "ă": ("ro",), "ș": ("ro",), "ț": ("ro",), "ş": ("ro",), "ţ": ("ro",), "î": ("ro", "fr"),
+    "ð": ("is",), "þ": ("is",),
 }
+# Whole scripts that, among the markets' languages, only one language uses.
+SCRIPTS = (("bg", re.compile(r"[Ѐ-ӿ]")), ("el", re.compile(r"[Ͱ-Ͽἀ-῿]")))
 WORD_RE = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)?")
 
 
@@ -63,6 +74,10 @@ def guess_language(text: str) -> str:
         if langs:
             for lang in langs:
                 scores[lang] += 1.5 / len(langs)
+    for lang, script in SCRIPTS:
+        n = len(script.findall(text))
+        if n >= 3:
+            scores[lang] += 2 + n / 10
     if not scores:
         return ""
     (best, top), *rest = scores.most_common(2) + [("", 0)]
@@ -179,7 +194,7 @@ def analyze_comments(comments: list[dict]) -> dict | None:
 
 # --- Authenticity -----------------------------------------------------------------------------
 
-VERSION = 3  # bump when the assessment changes, so saved creators are re-assessed on start
+VERSION = 4  # bump when the assessment changes, so saved creators are re-assessed on start
 
 # Authenticity starts neutral: "nothing suspicious found" is not proof of a real audience. Positive evidence
 # raises it, warning signs lower it, and with little data it can't get high at all.
@@ -245,13 +260,34 @@ def authenticity(c: dict) -> dict:
 
 # --- Sponsorship ------------------------------------------------------------------------------
 
+_AD_WORDS = (r"mainos|reklam|reklame|reklaam|reklāma|reklama|werbung|anzeige|advertentie|annons|annonse|hirdetés|"
+              r"publicité|publicidad|pubblicità|ad|ads|sponsored|sponsoroitu|sponsrad|sponset|gesponsert|gesponsord|"
+              r"sponsorisé|patrocinado|sponsorizzato|sponzorováno|szponzorált|yhteistyö|samarbete|samarbeid|samarbejde|"
+              r"kooperation|partnerschaft|samenwerking|partenariat|collaborazione|colaboración|współpraca|spolupráce|"
+              r"koostöö|sadarbība|bendradarbiavimas|együttműködés")
+# A disclosed ad. Local creators often write it as a plain word in front ("Mainos @brand", "Werbung | ...",
+# "Yhteistyö: @shop"), not only as a hashtag, so a word at the start of a line followed by a separator or the brand
+# counts too. Check title and description as separate lines (see disclosed()), so "^" finds both starts.
 DISCLOSURE = re.compile(
-    r"#ad\b|#sponsored|#spons\b|#mainos|kaupallinen yhteistyö|yhteistyössä|#reklam|i samarbete med|sponsrad|annons\b|"
-    r"#reklame|i samarbeid med|sponset|sponsoreret|i samarbejde med|#werbung|#anzeige|gesponsert|in kooperation mit|"
-    r"#advertentie|gesponsord|in samenwerking met|#pub\b|#publicité|sponsorisé|en partenariat avec|#publi\b|patrocinado|"
-    r"en colaboración con|#adv\b|sponsorizzato|in collaborazione con|#reklama|materiał sponsorowany|sponsorowany|"
-    r"sponzorováno|szponzorált|sponsored by|paid partnership|thanks to \w+ for sponsoring|this video is sponsored",
-    re.I)
+    r"#ad\b|#ads\b|#sponsored|#spons\b|#sponsor\b|#mainos|#yhteistyö|#kaupallinenyhteistyö|#reklam|#reklame|#annons|"
+    r"#werbung|#anzeige|#advertentie|#pub\b|#publicité|#publi\b|#adv\b|#reklama|#reklaam|#paidpartnership|"
+    rf"^[\W_]*(?:{_AD_WORDS})\s*(?:[:|/()\[\]–—-]|@|\bfor\b|\bför\b|\bfür\b|\bvoor\b|\bmed\b|\bmit\b|\bwith\b|\bkanssa\b)|"
+    rf"[(\[](?:{_AD_WORDS})[)\]]|\byhteistyö\s*[:@]|"
+    r"kaupallinen yhteistyö|yhteistyössä|i samarbete med|betalt samarbete|samarbete med|annons\b|i samarbeid med|"
+    r"betalt samarbeid|i samarbejde med|betalt samarbejde|in kooperation mit|unbezahlte werbung|bezahlte partnerschaft|"
+    r"enthält werbung|werbung für|in samenwerking met|betaalde samenwerking|en partenariat avec|partenariat rémunéré|"
+    r"collaboration commerciale|en colaboración con|colaboración pagada|in collaborazione con|materiał sponsorowany|"
+    r"współpraca reklamowa|płatna współpraca|placená spolupráce|reklamní spolupráce|fizetett partner|"
+    r"fizetett együttműködés|koostöös|sadarbībā ar|bendradarbiaujant su|sponsorowany|sponzorováno|szponzorált|"
+    r"gesponsert|gesponsord|sponsrad|sponset|sponsoreret|sponsorisé|patrocinado|sponsorizzato|sponsored by|"
+    r"paid partnership|paid promotion|includes paid promotion|in partnership with|partnered with|"
+    r"thanks to \S+ for sponsoring|this video is sponsored",
+    re.I | re.M)
+
+
+def disclosed(post: dict) -> bool:
+    """A post that says it's an ad or a paid collaboration, in the title or the description."""
+    return bool(DISCLOSURE.search(f"{post.get('title') or ''}\n{post.get('desc') or ''}"))
 CODE = re.compile(r"\b(use|käytä|koodi|code|kod|rabattcode|rabattkod|gutschein|kupon|codice|código|kód)\b[\s:]*"
                   r"[\"'“]?[A-Z0-9]{3,}\b|\bpromo ?code\b|\bdiscount code\b|\baffiliate\b", re.I)
 
@@ -260,7 +296,7 @@ def sponsorship(c: dict) -> dict:
     """How often recent posts carry a disclosed ad or a discount code."""
     posts = c.get("recent_posts", [])[:15]
     checked = [p for p in posts if (p.get("title") or p.get("desc"))]
-    sponsored = [p for p in checked if DISCLOSURE.search(f"{p.get('title') or ''} {p.get('desc') or ''}")]
+    sponsored = [p for p in checked if disclosed(p)]
     codes = [p for p in checked if CODE.search(f"{p.get('title') or ''} {p.get('desc') or ''}")]
     return {
         "checked": len(checked),

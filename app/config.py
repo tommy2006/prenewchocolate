@@ -21,6 +21,10 @@ IMG_DIR.mkdir(exist_ok=True)
 CLAUDE_FALLBACKS = os.getenv("CLAUDE_FALLBACKS", "1").strip() == "1"
 
 
+# Accounts smaller than this aren't creators a brand can work with yet (friends-and-family audiences): searches
+# never keep them and lists never show them, whatever the size filter says.
+MIN_FOLLOWERS = 1000
+
 # Caps that keep one discovery run to a few minutes and a few dollars.
 MAX_SCORE_PER_JOB = int(os.getenv("MAX_SCORE_PER_JOB", "100"))
 SCORE_BATCH_SIZE = 8

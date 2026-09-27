@@ -45,6 +45,14 @@ function ago(iso) {
   const days = Math.floor((Date.now() - new Date(iso)) / 864e5);
   return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
 }
+// Followers now vs the first time Scout saw them (kept on every refresh).
+function growthText(cr) {
+  const first = (cr.history || []).find((h) => h.followers && h.at);
+  if (!first || !cr.followers) return "";
+  const d = (cr.followers - first.followers) / first.followers;
+  const since = ago(first.at).replace(" ago", "");
+  return Math.abs(d) < 0.005 ? `followers unchanged in ${since}` : `followers ${d > 0 ? "+" : ""}${(d * 100).toFixed(1)}% in ${since}`;
+}
 
 const ICONS = {
   youtube: '<svg class="ico" viewBox="0 0 24 24" fill="currentColor"><path d="M23 7.2a3 3 0 0 0-2.1-2.1C19 4.6 12 4.6 12 4.6s-7 0-8.9.5A3 3 0 0 0 1 7.2 31 31 0 0 0 .5 12a31 31 0 0 0 .5 4.8 3 3 0 0 0 2.1 2.1c1.9.5 8.9.5 8.9.5s7 0 8.9-.5a3 3 0 0 0 2.1-2.1 31 31 0 0 0 .5-4.8 31 31 0 0 0-.5-4.8zM9.7 15.1V8.9l5.8 3.1-5.8 3.1z"/></svg>',
@@ -114,7 +122,7 @@ function hideTip() { tipEl.hidden = true; }
 // Search criteria (saved per company, used for both filtering and new searches)
 const DEFAULT_SEARCH = { tags: [], markets: [], platforms: [], tiers: [], follower_min: null, follower_max: null, deal_types: [], avoid: [], example_creators: [], ai_scout: false, size_preset: "" };
 // ...plus filters that only narrow what's already in the library
-const DEFAULT_FILTERS = { ...DEFAULT_SEARCH, q: "", language: "", min_score: 0, min_eng: 0, views: "", has_email: false, gems: false, growing: false, show_hidden: false, sort: "match" };
+const DEFAULT_FILTERS = { ...DEFAULT_SEARCH, q: "", language: "", min_score: 0, min_eng: 0, views: "", fmt: "", age: "", has_email: false, gems: false, growing: false, show_hidden: false, sort: "match" };
 const S = {
   meta: null,
   companies: [],
@@ -278,6 +286,8 @@ function renderFilters() {
   $("#min-score-val").textContent = S.f.min_score;
   $("#f-min-eng").value = String(S.f.min_eng);
   $("#f-views").value = S.f.views || "";
+  $("#f-format").value = S.f.fmt || "";
+  $("#f-age").value = S.f.age || "";
   $("#f-has-email").checked = S.f.has_email;
   $("#f-growing").checked = S.f.growing;
   $("#f-gems").checked = S.f.gems;
@@ -341,6 +351,7 @@ function renderPlatforms() {
 
 function updateAdvCount() {
   const n = (S.f.language ? 1 : 0) + (S.f.min_score ? 1 : 0) + (S.f.min_eng ? 1 : 0) + (S.f.views ? 1 : 0)
+    + (S.f.fmt ? 1 : 0) + (S.f.age ? 1 : 0)
     + (S.f.has_email ? 1 : 0) + (S.f.gems ? 1 : 0) + (S.f.growing ? 1 : 0) + (S.f.show_hidden ? 1 : 0);
   $("#adv-count").hidden = !n;
   $("#adv-count").textContent = n;
@@ -524,6 +535,8 @@ function applyParsed(r, text) {
   if (f.gems) S.f.gems = true;
   if (f.growing) S.f.growing = true;
   if (f.engaged) S.f.min_eng = 50;
+  if (f.fmt) S.f.fmt = f.fmt;
+  if (f.age) S.f.age = f.age;
   S.f.q = r.rest || "";
   renderFilters();
   searchChanged();
@@ -579,7 +592,7 @@ function queryString(extra = {}) {
   const p = new URLSearchParams({
     q: f.q, tags: f.tags.join(","), platforms: f.platforms.join(","), tiers: f.tiers.join(","), markets: f.markets.join(","),
     fmin: f.follower_min || 0, fmax: f.follower_max || 0, usual: f.size_preset === "usual" && !!usualSize(),
-    vmin: +(f.views || "").split("-")[0] || 0, vmax: +(f.views || "").split("-")[1] || 0,
+    vmin: +(f.views || "").split("-")[0] || 0, vmax: +(f.views || "").split("-")[1] || 0, fmt: f.fmt || "", age: f.age || "",
     language: f.language, min_score: f.min_score, min_eng: f.min_eng, has_email: f.has_email, gems: f.gems, growing: f.growing,
     status: f.show_hidden ? "hidden" : "", sort: f.sort, page: S.page, page_size: 50, job: S.viewJob || "", ...extra,
   });
@@ -693,7 +706,7 @@ const cardHtml = modernCardHtml;
 function renderResults(data) {
   const grid = $("#grid");
   const filtered = S.f.q || S.f.tags.length || S.f.platforms.length || S.f.markets.length || S.f.language || S.f.follower_min || S.f.follower_max != null || S.f.size_preset || S.f.views
-    || S.f.min_score || S.f.min_eng || S.f.has_email || S.f.gems || S.f.growing || S.f.show_hidden;
+    || S.f.fmt || S.f.age || S.f.min_score || S.f.min_eng || S.f.has_email || S.f.gems || S.f.growing || S.f.show_hidden;
   $("#downloads").innerHTML = downloadLinks(data.total);
   if (!data.library_size) {
     $("#results-count").innerHTML = "";
@@ -794,6 +807,9 @@ function renderBulk() {
   bar.innerHTML = `<b>${n} selected</b>
     <button class="btn small" data-act="bulk-shortlist">${ICONS.star} Shortlist</button>
     <span class="pop-anchor"><button class="btn small" data-act="bulk-hide-menu">Not a fit ${ICONS.chev}</button></span>
+    ${S.meta.sources.ai ? `<button class="btn small" data-act="bulk-pitches" title="A first email and a short DM for each, in their own language">${ICONS.mail} Draft messages</button>` : ""}
+    <button class="btn small" data-act="bulk-contacts" title="Look for emails on their link pages, websites and YouTube channel links">Find emails</button>
+    <button class="btn small" data-act="bulk-refresh" title="Fetch today's followers, views and posts">Refresh numbers</button>
     <a class="btn small" href="${base}&format=xlsx" download>Download Excel</a>
     <button class="btn link" data-act="bulk-clear">Clear</button>`;
 }
@@ -1057,7 +1073,9 @@ function renderDetail(d) {
 
           <div class="contact-line">${ICONS.mail}
             ${firstEmail ? `<code>${esc(firstEmail)}</code><button class="btn small" data-act="copy" data-text="${esc(firstEmail)}">${ICONS.copy} Copy</button>`
-              : `<span class="muted">No public email. Message them on ${esc(platform)}.</span>`}
+                + (cr.email_sources?.[firstEmail] ? `<span class="muted small" title="Not in their bio: Scout found it on this page">found on ${esc(cr.email_sources[firstEmail])}</span>` : "")
+              : `<span class="muted">No public email. ${esc(c.contact_via && c.contact_via !== "No public contact" ? `Send a ${c.contact_via}` : `Message them on ${platform}`)}.</span>`
+                + (cr.contacts_checked ? "" : `<button class="btn small" data-act="panel-contacts" title="Look on their link page, website and YouTube channel links">Find email</button>`)}
             ${agency ? `<span class="tag" ${tipAttr("agency", c)}>Likely via agency</span>` : ""}
             ${Object.entries(cr.socials || {}).map(([k, l]) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS[k] || ICONS.ext} ${esc(k[0].toUpperCase() + k.slice(1))}</a>`).join("")}
           </div>
@@ -1082,6 +1100,8 @@ function renderDetail(d) {
                 <div><b>${cr.posts_per_month ?? "—"}</b><span>posts a month · last post ${daysAgo(cr.days_since_last_post)}</span></div>
                 <div><b>${euro(cr.price)}</b><span>estimated price per post</span></div>
               </div>
+              <p class="small muted numbers-age">Numbers from ${esc(ago(cr.fetched_at || m.created_at))}${growthText(cr) ? ` · ${esc(growthText(cr))}` : ""}
+                · <button class="btn link" data-act="panel-refresh">Refresh now</button></p>
               ${linked.length ? `<div class="also">${linked.map((o) => `<a href="${esc(o.url)}" target="_blank" rel="noopener">${ICONS[o.platform]} Also on ${esc(S.meta.platforms[o.platform])}: ${fmtNum(o.followers)}${o.avg_views != null ? ` · ${fmtNum(o.avg_views)} views` : ""}</a>`).join("")}</div>` : ""}`, open)}
             ${section("outreach", "First message", m.pitch ? "drafted" : `drafted by AI in ${esc(lang || "their language")}`,
               `<div id="pitch-area">${m.pitch ? pitchHtml(m.pitch, cr) : `<button class="btn" data-act="pitch">${ICONS.mail} Draft a message in ${esc(lang || "their language")}</button>`}</div>`, open)}
@@ -1324,6 +1344,10 @@ function pitchHtml(p, cr) {
       ${!sameLang && p.english ? `<button class="btn small" data-act="toggle-english" data-shown="orig">Show English</button>` : ""}
       <button class="btn small" data-act="pitch">Rewrite</button>
     </div>
+    ${p.dm ? `<div class="dm"><div class="subject">Short DM <span class="muted">· for their Instagram or TikTok inbox</span></div>
+      <textarea id="dm-text" rows="3" aria-label="Short direct message">${esc(p.dm)}</textarea>
+      <div class="actions"><button class="btn small" data-act="copy-dm">${ICONS.copy} Copy DM</button></div></div>` : ""}
+    ${p.idea ? `<p class="small muted pitch-idea">Idea: ${esc(p.idea)}</p>` : ""}
   </div>`;
 }
 
@@ -1383,6 +1407,23 @@ async function startSpecialJob(url, body = {}) {
   startPolling();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
+// Jobs that work on creators you already have (find emails, draft messages, refresh numbers): same progress
+// panel, but the list you're looking at stays as it is.
+const TASKS = {
+  contacts: { url: "find-contacts", done: (j) => `Found an email for ${j.new ?? 0} of ${j.to_score ?? 0} creators without one` },
+  pitches: { url: "pitches", done: (j) => `Drafted ${j.new ?? 0} first message${j.new === 1 ? "" : "s"}` },
+  refresh: { url: "refresh", done: (j) => `Updated the numbers of ${j.new ?? 0} creator${j.new === 1 ? "" : "s"}` },
+};
+async function startTask(mode, body) {
+  try {
+    S.job = await api(`/api/companies/${S.company.id}/${TASKS[mode].url}`, { method: "POST", body });
+  } catch (err) { return toast(err.message, "err"); }
+  renderJob();
+  startPolling();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+const forSelected = () => ({ ids: [...S.selected] });
+
 const searchBody = () => Object.fromEntries(Object.keys(DEFAULT_SEARCH).map((k) => [k, S.f[k]]));
 const findSimilar = (source, extra = {}) => startSpecialJob(`/api/companies/${S.company.id}/similar`, { ...searchBody(), source, ...extra });
 
@@ -1435,8 +1476,9 @@ async function startFind() {
 
 function jobProgress(job) {
   if (job.status === "done") return 100;
+  if (TASKS[job.mode]) return job.to_score ? Math.max(4, Math.round((100 * job.scored) / job.to_score)) : 4;
   const steps = job.steps || [];
-  const sources = steps.filter((s) => !["plan", "filter", "comments", "rules", "score", "link"].includes(s.key));
+  const sources = steps.filter((s) => !["plan", "filter", "contacts", "comments", "rules", "score", "link"].includes(s.key));
   const srcDone = sources.length ? sources.filter((s) => s.status !== "running").length / sources.length : 0;
   let p = 4;
   if (steps.find((s) => s.key === "plan")?.status === "done") p = 12;
@@ -1462,13 +1504,16 @@ function renderJob() {
   const unscored = job.unscored?.length || 0;
   const current = (job.steps || []).filter((s) => s.status === "running").map((s) => s.label).join(" · ");
   const quick = unscored ? ` (${unscored} with a quick score only)` : "";
-  const title = running ? (current || "Starting…")
+  const task = TASKS[job.mode];
+  const title = running ? (current || "Starting…") + (task && job.to_score ? ` (${job.scored ?? 0} of ${job.to_score})` : "")
+    : task ? (job.status === "done" ? task.done(job) : job.status === "stopped" ? "Stopped" : "Didn't finish")
     : job.status === "done" ? (job.mode === "tracker" ? `Looked up ${job.partners_found ?? 0} of ${job.partners_total ?? 0} creators from your tracker${quick}`
       : job.mode === "lookalike" ? (job.new ? `Done: ${job.new} creators like ${job.seed_names || "yours"}${quick}`
         : `Nothing new: ${job.seed_names || "they"} don't mention or feature anyone you don't have yet`)
       : `Done: ${job.new ?? 0} new creators ranked${quick}`)
     : job.status === "stopped" ? `Stopped: ${job.new ?? 0} creators ranked before you stopped` : "Search stopped";
-  const what = job.mode === "tracker" ? "Your collaboration tracker"
+  const what = task ? `${job.ids?.length ?? 0} creator${job.ids?.length === 1 ? "" : "s"}`
+    : job.mode === "tracker" ? "Your collaboration tracker"
     : job.mode === "lookalike" ? `Creators ${esc(job.seed_names || "you know")} mention or feature · ${esc(where)} · ${esc(on)}`
     : `${esc(where)} · ${esc(on)}${job.tags?.length ? ` · ${esc(job.tags.join(", "))}` : ""}${job.focus ? ` · “${esc(job.focus)}”` : ""}`;
   const open = el.querySelector("details")?.open;
@@ -1479,6 +1524,7 @@ function renderJob() {
       <span class="muted">${what}</span>
       <span class="spacer"></span>
       ${job.mode === "tracker" && job.status === "done" ? `<a class="btn small" href="/api/companies/${esc(job.company_id)}/tracker/export" download>${ICONS.download} Completed tracker</a>` : ""}
+      ${job.mode === "pitches" && job.status === "done" && job.new ? `<a class="btn small primary" href="/api/companies/${esc(job.company_id)}/export?ids=${encodeURIComponent((job.ids || []).join(","))}&status=any&format=xlsx" download>${ICONS.download} Excel with the messages</a>` : ""}
       ${!running && unscored && S.meta.sources.ai ? `<button class="btn small" data-act="retry-scoring" title="Let the search AI read their posts and re-score them">Check ${Math.min(unscored, S.meta.ai.check_limit || 40)} more with AI</button>` : ""}
       ${running ? `<button class="btn small" data-act="stop-job">Stop</button>` : '<button class="btn small" data-act="dismiss-job">Dismiss</button>'}
     </div>
@@ -1502,6 +1548,13 @@ function startPolling() {
       S.pollTimer = setTimeout(tick, 2000);
     } else {
       S.pollTimer = null;
+      if (TASKS[S.job.mode]) {  // the list stays; its numbers, emails and messages changed
+        if (S.view === "shortlist") renderShortlist(); else loadCreators({ quiet: true });
+        if (S.panelId && $("#detail").open) openDetail(S.panelId);
+        if (S.job.status === "done") toast(TASKS[S.job.mode].done(S.job), "ok");
+        else if (S.job.status !== "stopped") toast(S.job.error || "That didn't work", "err");
+        return;
+      }
       loadCreators();
       if (S.job.status === "done") {
         toast(S.job.mode === "tracker" ? `Looked up ${S.job.partners_found ?? 0} of ${S.job.partners_total ?? 0} creators from your tracker`
@@ -1524,7 +1577,7 @@ async function resumeJob() {
     renderJob();
   } else if (job && (job.status === "running" || job.status === "queued")) {
     S.job = job;
-    S.viewJob = job.id;
+    if (!TASKS[job.mode]) S.viewJob = job.id;
     renderJob();
     startPolling();
   } else {
@@ -1780,8 +1833,17 @@ async function renderShortlist() {
     return;
   }
   const statuses = [["shortlisted", "Shortlisted"], ["contacted", "Contacted"], ["replied", "Replied"], ["declined", "Declined"]];
-  el.innerHTML = `<div class="table-wrap"><table class="list">
-    <thead><tr><th>Creator</th><th class="num">Fit</th><th class="num">Quality</th><th class="num">Followers</th><th class="num">Views</th><th class="num">Est. price</th><th>Market</th><th>Email</th><th>Status</th></tr></thead>
+  const withEmail = data.items.filter((c) => c.has_email).length;
+  const drafted = data.items.filter((c) => c.has_pitch).length;
+  el.innerHTML = `<div class="list-actions">
+      <span class="muted">${withEmail} of ${data.total} have an email · ${drafted} message${drafted === 1 ? "" : "s"} drafted</span>
+      <span class="spacer"></span>
+      ${S.meta.sources.ai && drafted < data.total ? `<button class="btn small primary" data-act="list-pitches" title="A first email and a short DM for each creator without one, in their own language">${ICONS.mail} Draft ${drafted ? "the missing" : "all"} messages</button>` : ""}
+      ${withEmail < data.total ? `<button class="btn small" data-act="list-contacts" title="Look for emails on their link pages, websites and YouTube channel links">Find missing emails</button>` : ""}
+      <button class="btn small" data-act="list-refresh" title="Fetch today's followers, views and posts">Refresh numbers</button>
+    </div>
+    <div class="table-wrap"><table class="list">
+    <thead><tr><th>Creator</th><th class="num">Fit</th><th class="num">Quality</th><th class="num">Followers</th><th class="num">Views</th><th class="num">Est. price</th><th>Market</th><th>Email</th><th>Message</th><th>Status</th></tr></thead>
     <tbody>${data.items.map((c) => `
       <tr data-id="${esc(c.id)}">
         <td class="c-who"><div class="who">${avatar(c.avatar, c.name)}
@@ -1793,7 +1855,8 @@ async function renderShortlist() {
         <td class="num">${fmtNum(c.median_views ?? c.avg_views)}</td>
         <td class="num">${euro(c.price)}</td>
         <td class="c-mkt">${esc(c.country || "—")}</td>
-        <td>${c.email ? `<button class="btn small" data-act="copy" data-text="${esc(c.email)}">${ICONS.copy} ${esc(c.email)}</button>` : '<span class="muted">—</span>'}</td>
+        <td>${c.email ? `<button class="btn small" data-act="copy" data-text="${esc(c.email)}">${ICONS.copy} ${esc(c.email)}</button>` : `<span class="muted">${esc(c.contact_via || "—")}</span>`}</td>
+        <td>${c.has_pitch ? `<span class="drafted" title="Open the creator to read, copy or send it">${ICONS.mail} Drafted</span>` : '<span class="muted">—</span>'}</td>
         <td><select data-status-for="${esc(c.id)}">${statuses.map(([v, l]) => `<option value="${v}" ${c.status === v ? "selected" : ""}>${l}</option>`).join("")}
           <option value="">Remove</option></select></td>
       </tr>`).join("")}</tbody></table></div>`;
@@ -1847,6 +1910,8 @@ function bindEvents() {
   $("#f-min-score").addEventListener("input", (e) => { S.f.min_score = +e.target.value; $("#min-score-val").textContent = e.target.value; filtersChanged({ debounce: true }); });
   $("#f-min-eng").addEventListener("change", (e) => { S.f.min_eng = +e.target.value; filtersChanged(); });
   $("#f-views").addEventListener("change", (e) => { S.f.views = e.target.value; updateAdvCount(); filtersChanged(); });
+  $("#f-format").addEventListener("change", (e) => { S.f.fmt = e.target.value; updateAdvCount(); filtersChanged(); });
+  $("#f-age").addEventListener("change", (e) => { S.f.age = e.target.value; updateAdvCount(); filtersChanged(); });
   $("#f-has-email").addEventListener("change", (e) => { S.f.has_email = e.target.checked; filtersChanged(); });
   $("#f-growing").addEventListener("change", (e) => { S.f.growing = e.target.checked; filtersChanged(); });
   $("#f-gems").addEventListener("change", (e) => { S.f.gems = e.target.checked; filtersChanged(); });
@@ -2043,6 +2108,15 @@ function bindEvents() {
     else if (act === "bulk-shortlist") bulkStatus("shortlisted");
     else if (act === "bulk-hide-menu") reasonMenu(actEl, (r) => bulkStatus("hidden", r));
     else if (act === "bulk-clear") { S.selected.clear(); renderBulk(); loadCreators({ quiet: true }); }
+    else if (act === "bulk-pitches") startTask("pitches", forSelected());
+    else if (act === "bulk-contacts") startTask("contacts", forSelected());
+    else if (act === "bulk-refresh") startTask("refresh", forSelected());
+    else if (act === "list-pitches") startTask("pitches", { scope: "shortlist" });
+    else if (act === "list-contacts") startTask("contacts", { scope: "shortlist" });
+    else if (act === "list-refresh") startTask("refresh", { scope: "shortlist" });
+    else if (act === "panel-contacts") startTask("contacts", { ids: [S.panelId] });
+    else if (act === "panel-refresh") startTask("refresh", { ids: [S.panelId] });
+    else if (act === "copy-dm") { await navigator.clipboard.writeText($("#dm-text").value); toast("DM copied"); }
     else if (act === "panel-close") closeDetail();
     else if (act === "close-player") closePlayer();
     else if (act === "close-stats") $("#stats").close();

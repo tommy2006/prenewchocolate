@@ -30,13 +30,22 @@ COUNTRY_WORDS = {
     "PL": ["poland", "polish", "polska", "polski"],
     "CZ": ["czechia", "czech", "česko", "česky"],
     "HU": ["hungary", "hungarian", "magyar", "magyarország"],
+    "SK": ["slovakia", "slovak", "slovensko", "slovenský", "slovenská", "slovensky"],
+    "SI": ["slovenia", "slovenian", "slovene", "slovenija", "slovenski"],
+    "HR": ["croatia", "croatian", "hrvatska", "hrvatski"],
+    "RO": ["romania", "romanian", "românia", "română", "romana", "românesc"],
+    "BG": ["bulgaria", "bulgarian", "българия", "български", "bulgarski"],
+    "GR": ["greece", "greek", "ελλάδα", "ελληνικά", "ελληνικό", "hellas"],
+    "IS": ["iceland", "icelandic", "ísland", "íslenska", "islenska"],
+    "LU": ["luxembourg", "luxembourgish", "lëtzebuerg", "luxemburg"],
     "GB": ["uk", "britain", "british", "england", "english-speaking uk"],
     "IE": ["ireland", "irish"],
     "US": ["usa", "america", "american", "us-based"],
 }
-REGIONS = {"nordic": ["FI", "SE", "NO", "DK"], "nordics": ["FI", "SE", "NO", "DK"], "scandinavia": ["SE", "NO", "DK"],
-           "scandinavian": ["SE", "NO", "DK"], "baltic": ["EE", "LV", "LT"], "baltics": ["EE", "LV", "LT"],
-           "dach": ["DE", "AT", "CH"], "benelux": ["NL", "BE"]}
+REGIONS = {"nordic": ["FI", "SE", "NO", "DK", "IS"], "nordics": ["FI", "SE", "NO", "DK", "IS"],
+           "scandinavia": ["SE", "NO", "DK"], "scandinavian": ["SE", "NO", "DK"], "baltic": ["EE", "LV", "LT"],
+           "baltics": ["EE", "LV", "LT"], "dach": ["DE", "AT", "CH"], "benelux": ["NL", "BE", "LU"],
+           "cee": ["PL", "CZ", "SK", "HU", "SI", "HR", "RO", "BG"], "balkans": ["SI", "HR", "RO", "BG", "GR"]}
 PLATFORM_WORDS = {"youtube": "youtube", "youtuber": "youtube", "youtubers": "youtube", "yt": "youtube",
                   "tiktok": "tiktok", "tiktoker": "tiktok", "tiktokers": "tiktok", "tik tok": "tiktok",
                   "twitch": "twitch", "streamer": "twitch", "streamers": "twitch"}
@@ -66,6 +75,16 @@ NICHE_ALIASES = {
     "Gaming news": r"gaming news",
 }
 NUM = r"(\d+(?:[.,]\d+)?)\s*(k|m|thousand|million)?"
+# What they make and who watches (read before sizes, so "16+" isn't taken as 16 followers).
+FORMAT_WORDS = [
+    (r"(?<!\w)(long[- ]form|long videos?|full[- ]length( videos?)?)(?!\w)", "fmt", "long"),
+    (r"(?<!\w)(shorts|short[- ]form|short videos?|reels)(?!\w)", "fmt", "short"),
+    (r"(?<!\w)(live ?streams?|livestreamers?|streaming live)(?!\w)", "fmt", "live"),
+    (r"(?<!\w)(adult (audience|viewers)|older (audience|viewers)|adults?|grown[- ]ups?)(?!\w)|(?<![\w.])(16|18) ?\+", "age", "adult"),
+    (r"(?<!\w)(no kids|not (for )?kids|without kids|not kids)(?!\w)", "age", "no_kids"),
+]
+FORMAT_TEXT = {"long": "long videos", "short": "short videos", "live": "live streams"}
+AGE_TEXT = {"adult": "audience mostly 16+", "no_kids": "not mainly kids"}
 
 
 def _num(value: str, unit: str | None) -> int:
@@ -106,7 +125,13 @@ def parse(text: str, known_tags: list[str] | None = None) -> dict:
         nonlocal t
         t = t[:span[0]] + " " * (span[1] - span[0]) + t[span[1]:]
 
-    # Size first: "under 50k", "10k-50k", "50k+", "at least 5k".
+    for pattern, key, value in FORMAT_WORDS:
+        m = re.search(pattern, t)
+        if m and key not in f:
+            f[key] = value
+            take(m.span())
+
+    # Then size: "under 50k", "10k-50k", "50k+", "at least 5k".
     for pattern, kind in ((rf"\b(?:between\s+)?{NUM}\s*(?:-|–|to|and)\s*{NUM}\b", "range"),
                           (rf"(?:under|below|less than|fewer than|max(?:imum)?|up to|<)\s*{NUM}\b", "max"),
                           (rf"(?:over|above|more than|at least|min(?:imum)?|>)\s*{NUM}\b", "min"),
@@ -194,6 +219,10 @@ def describe(f: dict) -> list[str]:
             parts.append(label)
     if f.get("language"):
         parts.append(f"posts in {LANGUAGES.get(f['language'], f['language'])}")
+    if f.get("fmt") in FORMAT_TEXT:
+        parts.append(FORMAT_TEXT[f["fmt"]])
+    if f.get("age") in AGE_TEXT:
+        parts.append(AGE_TEXT[f["age"]])
     return parts
 
 

@@ -32,7 +32,7 @@ GOALS = {
 }
 
 
-VERSION = 9  # bump when scores are computed differently, so saved matches are re-scored on start
+VERSION = 10  # bump when scores are computed differently, so saved matches are re-scored on start
 UNPROVEN_MAX = 70  # a fit part with nothing cited behind it can't count as strong
 
 

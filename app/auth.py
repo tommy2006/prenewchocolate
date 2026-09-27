@@ -7,9 +7,14 @@ be left open to the internet by mistake.
 import hashlib
 import hmac
 import os
+import secrets
 import time
 
+from .config import DATA_DIR
+
 COOKIE = "scout_session"
+ADMIN_HEADER = "x-scout-admin"
+ADMIN_TOKEN_PATH = DATA_DIR / ".admin_token"
 MAX_AGE = 30 * 24 * 3600
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 PROXY_HEADERS = ("x-forwarded-for", "x-real-ip", "forwarded")  # set by Vercel, Caddy, nginx...
@@ -51,3 +56,21 @@ def is_local(request) -> bool:
     """A request from this computer itself, not one a proxy passed on."""
     host = request.client.host if request.client else ""
     return host in LOCAL_HOSTS and not any(h in request.headers for h in PROXY_HEADERS)
+
+
+def admin_token() -> str:
+    """A random token in the data folder (readable only by whoever runs Scout). Scripts on the server itself send it
+    as X-Scout-Admin to use the API without the team password, e.g. over SSH: curl -H "X-Scout-Admin: $(cat
+    data/.admin_token)" http://127.0.0.1:8002/api/..."""
+    if not ADMIN_TOKEN_PATH.exists():
+        ADMIN_TOKEN_PATH.write_text(secrets.token_urlsafe(32), encoding="utf-8")
+        try:
+            os.chmod(ADMIN_TOKEN_PATH, 0o600)
+        except OSError:
+            pass
+    return ADMIN_TOKEN_PATH.read_text(encoding="utf-8").strip()
+
+
+def is_admin(request) -> bool:
+    given = request.headers.get(ADMIN_HEADER) or ""
+    return bool(given) and is_local(request) and hmac.compare_digest(given.encode(), admin_token().encode())

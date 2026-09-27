@@ -53,9 +53,14 @@ Scout automates influencer discovery for brands like Prenew, with a focus on mic
    uses the writing AI) reads descriptions and up to 30 comments and writes a verdict, who the audience likely is,
    and a collaboration idea. The ranking (**match**) blends Fit and Quality by the brand's campaign goal
    (Sales 65/35, Balanced 60/40, Awareness 50/50). Small, highly engaged, authentic on-niche creators get a **Gem** tag.
-6. **Act.** Shortlist (or select several), see contact details and an estimated price per post, draft a first
-   message in the creator's language, and download **Excel or CSV**. "Not a fit" asks for a one-tap reason
+6. **Act.** Shortlist (or select several), see contact details and an estimated price per post, and download
+   **Excel or CSV**. On the Shortlist, one click **drafts a first email and a short DM for every creator** in their
+   own language (with the collaboration idea), **finds missing emails** (their Linktree/solo.to/Beacons page, their
+   own website, the links on their YouTube channel page) and **refreshes the numbers** (growth since the last check
+   is kept). The download then carries the messages, ready to send. "Not a fit" asks for a one-tap reason
    (wrong niche, audience too young...); the AI sees those reasons and the shortlist on the next search.
+   *More filters* narrows by **format** (long videos, short videos, live streams) and **likely audience**
+   (not mainly kids, mostly 16+). Accounts under 1,000 followers are never kept or shown.
 
 **Downloads use Prenew's own tracker layout.** The first 12 columns match their collaboration sheet exactly
 (Creator key, Market, Country, Creator / channel, Agency, Year-week, Platform, Niche / content,
@@ -84,10 +89,14 @@ shows the AI the past partners as examples of what fits (niche, size, market, pl
 
 **Data per creator (what Prenew asked for):** country · subscribers/followers · **average and median views over the
 last 30 days** (90 days for less active creators; YouTube Shorts and posts under 2 days old are left out) ·
-**niche and which games** · contact details (emails from the bio *and* video descriptions, plus their other
-profiles like Instagram/Twitch/Discord) · risks and brand safety · **views trend** (last 30 days vs. the 60 before) ·
-engagement vs. typical for their size · posting frequency · consistency · **authenticity signals** · comment
-languages · sponsored posts and discount codes · **estimated price per post**.
+**niche and which games** · contact details (emails from the bio, video descriptions, their link page and their own
+website, plus their other profiles like Instagram/Twitch/Discord, and where each email was found) · risks and brand
+safety · **views trend** (last 30 days vs. the 60 before) · engagement vs. typical for their size · posting frequency ·
+consistency · **authenticity signals** · comment languages · sponsored posts and discount codes (also disclosures
+written as a plain word in 20+ languages: "Mainos @brand", "Yhteistyö:", "Werbung |"...) · **estimated price per post**.
+
+**Markets:** 30 (the Nordics, the Baltics, DACH, Benelux, France, Spain, Italy, Portugal, Poland, Czechia, Slovakia,
+Hungary, Slovenia, Croatia, Romania, Bulgaria, Greece, the UK, Ireland, the US), each searched in its own language.
 
 Any size can be searched; with no size picked, everything from 1k followers up is included.
 **The company's usual size** is set per platform in *Brand profile* (Prenew: YouTube 50k–250k subscribers,
@@ -178,6 +187,11 @@ never leave the server: Settings shows only their last 4 characters, and a key i
 was saved with (a cloud AI's address is fixed; a new address for your own GPU server needs its key typed again, to
 test or to save). Anyone logged in can still use the keys and change Settings, so give paid AI keys a spend limit.
 
+- **A link that logs in:** `https://your-scout/?pass=THE-PASSWORD` sets the login and opens Scout (handy for a demo
+  or a QR code; anyone with the link is in).
+- **Scripts on the server itself** can use the API without the password: `curl -H "X-Scout-Admin: $(cat
+  data/.admin_token)" http://127.0.0.1:PORT/api/...`. The token only works from the same machine, never through a proxy.
+
 ## Cost and limits for one search (2 markets, YouTube + TikTok)
 
 - YouTube: about 1,000 of the 10,000 free daily quota units (4 searches of 100 units per market + cheap channel/video
@@ -224,6 +238,7 @@ app/settings.py    Settings screen storage: chosen AI, keys (data/settings.json,
 app/metrics.py     engagement vs size-typical benchmarks, activity, email extraction, agency guess
 app/export.py      Excel/CSV downloads in Prenew's tracker layout (one row per creator)
 app/linking.py     links one person's YouTube/TikTok/Instagram profiles (only when one links to the other)
+app/contacts.py    emails beyond the bio: link pages (Linktree, solo.to...), their own website, YouTube channel links
 app/partners.py    imports a collaboration tracker; flags past partners
 app/sources/       youtube.py (Data API), tiktok.py (own scraper) + websearch.py
 app/store.py       JSON-file database (data/db.json)

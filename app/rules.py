@@ -211,6 +211,15 @@ def comment_quotes(c: dict, kind: str, n: int = 2) -> list[str]:
 BUYER_NICHES = {"PC building", "Tech reviews", "Gaming setup", "Budget gaming"}
 
 
+def name_pattern(name: str) -> re.Pattern | None:
+    """A brand name as creators write it: "Verkkokauppa.com" also matches "@Verkkokauppacom" and "verkkokauppa com",
+    "Jimm's PC-Store" also "jimms_pcstore". Punctuation and spaces between the name's parts are optional."""
+    parts = re.findall(r"[^\W_]+", (name or "").lower())
+    if not parts or sum(map(len, parts)) < 3:
+        return None
+    return re.compile(r"(?<![\w@#])[@#]?" + r"[\s.\-_'’&]?".join(re.escape(p) for p in parts) + r"(?![^\W_])", re.I)
+
+
 def _posts_matching(c: dict, pattern: re.Pattern) -> list[dict]:
     return [p for p in c.get("recent_posts", [])[:12] if pattern.search(f"{p.get('title') or ''} {p.get('desc') or ''}")]
 
@@ -388,12 +397,12 @@ def quick_score(c: dict, company: dict, search: dict) -> dict:
     if len(comments) >= 20 and len(rough) / len(comments) >= 0.08:
         mark("-", f"Rough tone in the comments: {len(rough)} of {len(comments)} sampled comments swear", -5, quotes=[t[:120] for t in rough[:2]])
     for name in profile.get("competitors") or []:
-        if len(name) < 3:
+        pattern = name_pattern(name)
+        if not pattern:
             continue
-        pattern = re.compile(r"(?<!\w)#?" + re.escape(name.lower()).replace(r"\ ", r"\s?") + r"(?!\w)", re.I)
         hits = _posts_matching(c, pattern)
         if hits or pattern.search(bio):
-            sponsored = [p for p in hits if audience_mod.DISCLOSURE.search(f"{p.get('title') or ''} {p.get('desc') or ''}")]
+            sponsored = [p for p in hits if audience_mod.disclosed(p)]
             competitor = competitor or bool(sponsored)
             mark("-", f"{'Sponsored by' if sponsored else 'Mentions'} {name}, a competitor", -25 if sponsored else -10, scoring.cite(sponsored or hits))
     brand_name = (company.get("name") or "").lower()
@@ -403,7 +412,7 @@ def quick_score(c: dict, company: dict, search: dict) -> dict:
             mark("+", f"Has mentioned {company['name']} before", 10, scoring.cite(own))
     deals, names = [], set()
     for p in looked:  # a brand named right by an ad disclosure ("Yhteistyössä @Turtle Beach"), not just any mention
-        post = f"{p.get('title') or ''} {p.get('desc') or ''}"
+        post = f"{p.get('title') or ''}\n{p.get('desc') or ''}"
         near = {b.group(0).title() for d in audience_mod.DISCLOSURE.finditer(post)
                 for b in TECH_BRANDS.finditer(post[max(0, d.start() - 80): d.end() + 80])}
         if near:
@@ -535,7 +544,8 @@ LOCAL_WORD = {
     "FI": "suomi", "SE": "svenska", "NO": "norsk", "DK": "dansk", "EE": "eesti", "LV": "latvija", "LT": "lietuva",
     "DE": "deutsch", "AT": "österreich", "CH": "schweiz", "NL": "nederlands", "BE": "belgië", "FR": "français",
     "ES": "español", "IT": "italiano", "PT": "português", "PL": "polska", "CZ": "česky", "HU": "magyar",
-    "GB": "uk", "IE": "ireland", "US": "usa",
+    "SK": "slovensko", "SI": "slovenija", "HR": "hrvatska", "RO": "romania", "BG": "българия", "GR": "ελλάδα",
+    "IS": "ísland", "LU": "luxembourg", "GB": "uk", "IE": "ireland", "US": "usa",
 }
 
 

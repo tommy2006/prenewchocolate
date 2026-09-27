@@ -5,7 +5,7 @@ import logging
 
 import httpx
 
-from . import audience, config, linking, llm, lookalike, metrics, rules, scoring, settings, tracker
+from . import audience, config, contacts, linking, llm, lookalike, metrics, rules, scoring, settings, tracker
 from .images import cache_creator_images
 from .markets import MARKETS
 from .sources import tiktok, twitch, youtube
@@ -39,6 +39,8 @@ def merge_ai(quick: dict, ai: dict) -> dict:
     """The AI's judgement on top of the quick score: whatever the AI left empty keeps the rules' value.
     Evidence: the AI's claims, plus the hard facts the rules read from the data (country, comments, email...)."""
     merged = {**quick, **{k: v for k, v in ai.items() if v not in (None, "", [])}}
+    # A disclosed ad for a competitor is a fact the rules read from the posts: the AI can't overrule it.
+    merged["competitor_sponsor"] = bool(quick.get("competitor_sponsor") or ai.get("competitor_sponsor"))
     if ai.get("evidence"):
         seen = {(e["dim"], e["text"].lower()) for e in ai["evidence"]}
         merged["evidence"] = ai["evidence"] + [e for e in quick.get("evidence", [])
@@ -92,7 +94,8 @@ def build_match(creator: dict, r: dict, job_id: str, markets: list[str] | None, 
         "games": [str(g) for g in (r.get("games") or []) if g][:6],
         "tags": r.get("tags", [])[:5],
         "matched_tags": r.get("matched_tags", []),
-        "hidden_gem": followers < 50_000 and parts["content"] >= 75 and q_parts["engagement"] >= 65 and q_parts["authenticity"] >= 60,
+        "hidden_gem": config.MIN_FOLLOWERS <= followers < 50_000 and parts["content"] >= 75 and q_parts["engagement"] >= 65
+                      and q_parts["authenticity"] >= 60,
         "ai_checked": checked != "rules",
         "checked": checked,  # rules | ai | deep
         "status": None,
@@ -198,7 +201,8 @@ async def run_job(job_id: str) -> None:
     by_platform = job.get("size_by_platform") or {}  # the company's usual size per platform, when picked
 
     def size_of(platform: str) -> tuple:
-        return tuple(by_platform[platform]) if platform in by_platform else (fmin, fmax)
+        lo, hi = tuple(by_platform[platform]) if platform in by_platform else (fmin, fmax)
+        return max(lo or 0, config.MIN_FOLLOWERS), hi
 
     platforms = [p for p in job["platforms"] if settings.source_status().get(p)]
     ai = settings.ai_config()
@@ -292,6 +296,7 @@ async def run_job(job_id: str) -> None:
 
             sem = asyncio.Semaphore(12)
             await asyncio.gather(*(cache_creator_images(http, c, sem) for c in pool))
+            await _contacts_step(http, job, pool)
             await _comments_step(http, job, pool)
 
         for c in pool:
@@ -346,6 +351,7 @@ async def run_tracker(job_id: str) -> None:
             pool = [c for c in found if c["id"] not in matches]
             sem = asyncio.Semaphore(12)
             await asyncio.gather(*(cache_creator_images(http, c, sem) for c in pool))
+            await _contacts_step(http, job, pool)
             await _comments_step(http, job, pool)
         fresh = {c["id"] for c in pool}
         for c in found:
@@ -377,6 +383,19 @@ async def run_tracker(job_id: str) -> None:
     finally:
         job["finished_at"] = now_iso()
         store.save()
+
+
+CONTACTS_LABEL = "Finding emails on link pages and websites"
+
+
+async def _contacts_step(http, job: dict, pool: list[dict]) -> None:
+    """Creators whose bio has no email: their link page, website and YouTube channel links often do."""
+    todo = [c for c in pool if not c.get("emails")]
+    if not todo:
+        return
+    _step(job, "contacts", CONTACTS_LABEL, detail=f"{len(todo)} without an email in their bio")
+    gained = await contacts.enrich_many(http, todo)
+    _step(job, "contacts", CONTACTS_LABEL, "done", f"email found for {gained} of {len(todo)} without one in their bio")
 
 
 async def _comments_step(http, job: dict, pool: list[dict]) -> None:
@@ -677,24 +696,198 @@ def upgrade_library() -> None:
         store.save()
 
 
+def rescore_one(company: dict, cid: str) -> None:
+    """Recompute one creator's Fit/Quality/match from the stored parts and today's data (no AI call)."""
+    m = store.matches.get(company["id"], {}).get(cid)
+    c = store.creators.get(cid)
+    if not c or not m or "fit_parts" not in m:
+        return
+    quick = rules.quick_score(c, company, search_of(m))
+    if not m.get("ai_checked"):  # rules only: cheap to redo, and budget or competitors may have changed
+        store.matches[company["id"]][cid] = rebuild(m, c, company, quick)
+        return
+    p = m["fit_parts"]
+    # Keep the AI's judgement, but refresh the facts read from data (budget, competitors, comments, contacts...).
+    facts = [e for e in quick["evidence"] if e.get("fact")]
+    evidence = [e for e in m.get("evidence") or [] if e.get("src") == "ai"] + facts
+    r = {"content_fit": p["content"], "audience_fit": p["audience"], "market_fit": p["market"], "brand_fit": p["brand"],
+         "readiness": p["readiness"], "brand_safety": m.get("brand_safety"),
+         "competitor_sponsor": bool(m.get("competitor_sponsor") or quick.get("competitor_sponsor")),
+         "evidence": evidence, "unproven": m.get("unproven") or {},
+         "ai_checked": m.get("checked") if m.get("checked") == "deep" else m.get("ai_checked"),
+         **{k: m.get(k) for k in ("language", "country", "summary", "niche", "games", "tags", "matched_tags",
+                                  "verdict", "collab_idea", "audience_note")}}
+    store.matches[company["id"]][cid] = rebuild(m, c, company, r)
+
+
 def rescore_company(company: dict) -> None:
     """The brand profile changed (goal, budget...): recompute Fit/Quality/match from the stored parts."""
-    for cid, m in store.matches.get(company["id"], {}).items():
-        c = store.creators.get(cid)
-        if not c or "fit_parts" not in m:
-            continue
-        if not m.get("ai_checked"):  # rules only: cheap to redo, and budget or competitors may have changed
-            store.matches[company["id"]][cid] = rebuild(m, c, company, rules.quick_score(c, company, search_of(m)))
-            continue
-        p = m["fit_parts"]
-        # Keep the AI's judgement, but refresh the facts read from data (budget, competitors, comments...).
-        facts = [e for e in rules.quick_score(c, company, search_of(m))["evidence"] if e.get("fact")]
-        evidence = [e for e in m.get("evidence") or [] if e.get("src") == "ai"] + facts
-        r = {"content_fit": p["content"], "audience_fit": p["audience"], "market_fit": p["market"], "brand_fit": p["brand"],
-             "readiness": p["readiness"], "brand_safety": m.get("brand_safety"), "competitor_sponsor": m.get("competitor_sponsor"),
-             "evidence": evidence, "unproven": m.get("unproven") or {},
-             "ai_checked": m.get("checked") if m.get("checked") == "deep" else m.get("ai_checked"),
-             **{k: m.get(k) for k in ("language", "country", "summary", "niche", "games", "tags", "matched_tags",
-                                      "verdict", "collab_idea", "audience_note")}}
-        store.matches[company["id"]][cid] = rebuild(m, c, company, r)
+    for cid in list(store.matches.get(company["id"], {})):
+        rescore_one(company, cid)
+    store.save()
+
+
+# --- Jobs that aren't searches: finding contacts, drafting messages, refreshing numbers ----------------------
+
+async def run_task(job_id: str, work) -> None:
+    """Run `work(job, company)` as a job with the same progress panel, Stop button and error handling as a search."""
+    job = store.jobs[job_id]
+    company = store.companies[job["company_id"]]
+    job["status"] = "running"
+    try:
+        await work(job, company)
+        job["status"] = "done"
+    except asyncio.CancelledError:
+        _stopped(job)
+    except Exception as e:
+        log.exception("job %s failed", job_id)
+        job["status"] = "error"
+        job["error"] = str(e)[:300]
+    finally:
+        job["finished_at"] = now_iso()
+        store.save()
+
+
+def _progress(job: dict, key: str, label: str, done: int, total: int, status: str = "running", detail: str = "") -> None:
+    job["scored"], job["to_score"] = done, total
+    _step(job, key, label, status, detail or f"{done} / {total}")
+
+
+async def find_contacts(job: dict, company: dict) -> None:
+    """Link pages, websites and YouTube channel links for every creator in the list without an email."""
+    todo = [store.creators[cid] for cid in job.get("ids", []) if cid in store.creators and not store.creators[cid].get("emails")]
+    total, done, gained = len(todo), 0, 0
+    _progress(job, "contacts", CONTACTS_LABEL, 0, total)
+    sem = asyncio.Semaphore(6)
+    async with httpx.AsyncClient() as http:
+        async def one(c):
+            nonlocal done, gained
+            async with sem:
+                try:
+                    if await contacts.enrich(http, c):
+                        gained += 1
+                        rescore_one(company, c["id"])
+                except Exception as e:  # one broken page shouldn't stop the rest
+                    log.info("contacts for %s failed: %s", c["id"], e)
+            done += 1
+            _progress(job, "contacts", CONTACTS_LABEL, done, total)
+        await asyncio.gather(*(one(c) for c in todo))
+    job["new"] = gained
+    _progress(job, "contacts", CONTACTS_LABEL, done, total, "done", f"email found for {gained} of {total} without one")
+    store.save()
+    added = await fetch_linked(todo, limit=40)  # the other profiles those pages link to
+    if added:
+        _step(job, "link", "Adding their other platforms", "done", f"{added} linked profiles added")
+
+
+PITCH_LABEL = "Writing first messages in each creator's language"
+
+
+async def draft_pitches(job: dict, company: dict) -> None:
+    """A first message (email and short DM) for each creator in the list that has none yet (or all, with redo)."""
+    matches = store.matches.get(company["id"], {})
+    todo = [cid for cid in job.get("ids", []) if cid in matches and cid in store.creators
+            and (job.get("redo") or not matches[cid].get("pitch"))]
+    total, done, ok, errors = len(todo), 0, 0, []
+    _progress(job, "pitches", PITCH_LABEL, 0, total)
+    ai = settings.writer_config()
+    sem = asyncio.Semaphore(ai.get("concurrency") or (1 if ai["local"] else 3))
+
+    async def one(cid):
+        nonlocal done, ok
+        async with sem:
+            m = store.matches.get(company["id"], {}).get(cid)
+            if m is not None:
+                search = store.jobs.get(m.get("job_id")) or company.get("search", {})
+                try:
+                    m["pitch"] = await llm.draft_pitch(company, search, store.creators[cid], m)
+                    ok += 1
+                except Exception as e:  # the others can still be written
+                    errors.append(str(e)[:200])
+        done += 1
+        _progress(job, "pitches", PITCH_LABEL, done, total)
+        if done % 5 == 0:
+            store.save()
+
+    await asyncio.gather(*(one(cid) for cid in todo))
+    job["new"] = ok
+    skipped = len(job.get("ids", [])) - total
+    detail = f"{ok} of {total} drafted" + (f"; {skipped} already had one" if skipped else "") + (f"; {len(errors)} failed: {errors[0]}" if errors else "")
+    _progress(job, "pitches", PITCH_LABEL, done, total, "error" if errors and not ok else "done", detail)
+    if errors and not ok:
+        raise RuntimeError(errors[0])
+
+
+REFRESH_LABEL = "Fetching today's followers, views and posts"
+KEEP_ON_REFRESH = ("email_sources", "about_links", "contacts_checked", "comment_sample")
+
+
+def _carry_over(prev: dict, new: dict) -> dict:
+    """A re-fetched profile keeps what was learned about the creator before (contacts, where they were found)
+    and remembers the old numbers, so growth since then can be shown."""
+    new["found_via"] = sorted(set(prev.get("found_via", [])))  # a refresh isn't a new discovery
+    for key in KEEP_ON_REFRESH:
+        if prev.get(key) and not new.get(key):
+            new[key] = prev[key]
+    new["emails"] = list(dict.fromkeys((new.get("emails") or []) + (prev.get("emails") or [])))[:5]
+    new["socials"] = {**(prev.get("socials") or {}), **(new.get("socials") or {})}
+    for key in ("country", "language"):
+        new[key] = new.get(key) or prev.get(key) or ""
+    point = {"at": prev.get("fetched_at"), "followers": prev.get("followers"), "median_views": prev.get("median_views"),
+             "avg_views": prev.get("avg_views")}
+    new["history"] = ((prev.get("history") or []) + ([point] if point["at"] else []))[-12:]
+    new["fetched_at"] = new["refreshed_at"] = now_iso()
+    return new
+
+
+async def refresh_numbers(job: dict, company: dict) -> None:
+    """Today's numbers for the creators in the list. Scores are recomputed; the AI's judgement is kept."""
+    old = {cid: store.creators[cid] for cid in job.get("ids", []) if cid in store.creators}
+    total = len(old)
+    _progress(job, "refresh", REFRESH_LABEL, 0, total)
+    status = settings.source_status()
+    by_platform: dict[str, list[dict]] = {}
+    for c in old.values():
+        by_platform.setdefault(c["platform"], []).append(c)
+    fresh: dict[str, dict] = {}
+    async with httpx.AsyncClient() as http:
+        yt_ids = [c["id"][3:] for c in by_platform.get("youtube", []) if c["id"].startswith("yt_")]
+        if yt_ids and status.get("youtube"):
+            for i in range(0, len(yt_ids), 50):
+                for rec in await youtube.build(http, await youtube.fetch_channels(http, yt_ids[i:i + 50]), {}):
+                    fresh[rec["id"]] = rec
+                _progress(job, "refresh", REFRESH_LABEL, len(fresh), total)
+        handles = [c["handle"].lstrip("@") for c in by_platform.get("tiktok", []) if c.get("handle")]
+        if handles:
+            for rec in await tiktok.lookup_handles(http, handles, ""):
+                fresh[rec["id"]] = rec
+            _progress(job, "refresh", REFRESH_LABEL, len(fresh), total)
+        logins = [c["handle"] for c in by_platform.get("twitch", []) if c.get("handle")]
+        if logins and status.get("twitch"):
+            for i in range(0, len(logins), 100):
+                for rec in await twitch.lookup_logins(http, logins[i:i + 100], ""):
+                    fresh[rec["id"]] = rec
+        ig = [c["handle"].lstrip("@") for c in by_platform.get("instagram", []) if c.get("handle")]
+        if ig:
+            from .sources import instagram  # noqa: PLC0415 (only when there are Instagram creators)
+            for rec in await instagram.lookup_handles(http, ig, ""):
+                fresh[rec["id"]] = rec
+        updated = []
+        for cid, new in fresh.items():
+            if cid in old:
+                metrics.compute(new)
+                updated.append(_carry_over(old[cid], new))
+        _progress(job, "refresh", REFRESH_LABEL, len(updated), total)
+        sem = asyncio.Semaphore(12)
+        await asyncio.gather(*(cache_creator_images(http, c, sem) for c in updated))
+        await contacts.enrich_many(http, [c for c in updated if not c.get("emails")])
+        await _comments_step(http, job, [c for c in updated if c["platform"] == "youtube"])
+    for new in updated:
+        audience.assess(new)
+        store.creators[new["id"]] = new
+        rescore_one(company, new["id"])
+    job["new"] = len(updated)
+    missing = total - len(updated)
+    _progress(job, "refresh", REFRESH_LABEL, len(updated), total, "done",
+              f"{len(updated)} of {total} updated" + (f"; {missing} not found (renamed, private or no longer active)" if missing else ""))
     store.save()
