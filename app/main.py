@@ -335,10 +335,14 @@ async def profile_from_website(body: WebsiteIn):
 
 
 @app.put("/api/companies/{company_id}/search")
-async def save_search(company_id: str, body: SearchIn):
+async def save_search(company_id: str, body: SearchIn, request: Request):
+    """The team's saved search: what a browser that hasn't searched here yet lands on (judges included). Each browser
+    keeps its own last search, so only a script on the server itself (the admin token) changes this one: a teammate's
+    search, or an old tab still running a previous version of the page, can't move everyone's landing."""
     company = _company(company_id)
-    company["search"] = body.model_dump()
-    store.save()
+    if auth.is_admin(request):
+        company["search"] = body.model_dump()
+        store.save()
     return company["search"]
 
 
@@ -353,11 +357,17 @@ async def delete_company(company_id: str):
     return {"ok": True}
 
 
+def _known_tags(company: dict) -> list[str]:
+    """Creator types the company has: suggested ones, the saved search's and those used in searches."""
+    return list(dict.fromkeys(company.get("suggested_tags", []) + company["search"].get("tags", [])
+                              + company.get("used_tags", [])))
+
+
 @app.post("/api/companies/{company_id}/suggest-tags")
 async def suggest_tags(company_id: str):
     """More creator-type ideas; new ones are added to the company's suggestions."""
     company = _company(company_id)
-    have = company.get("suggested_tags", []) + company["search"].get("tags", [])
+    have = _known_tags(company)
     fresh = await llm.suggest_tags(company["name"], company.get("description", ""), have)
     company["suggested_tags"] = company.get("suggested_tags", []) + fresh
     store.save()
@@ -742,7 +752,7 @@ class QueryIn(BaseModel):
 async def parse_query(company_id: str, body: QueryIn):
     """Plain words -> filters. Rules first (instant, free); the AI only for what's left over."""
     company = _company(company_id)
-    known = list(dict.fromkeys(company.get("suggested_tags", []) + company["search"].get("tags", [])))
+    known = _known_tags(company)
     out = query.parse(body.q, known)
     out["source"] = "rules"
     if body.ai and len(out["rest"]) >= 4 and settings.source_status()["ai"]:
@@ -1018,7 +1028,8 @@ async def start_job(company_id: str, body: JobIn):
     all_markets = not markets  # "All markets": every market, with a lighter search in each (see pipeline)
     markets = markets or list(MARKETS)
     _one_at_a_time(company_id)
-    company["search"] = SearchIn(**body.model_dump(exclude={"focus"})).model_dump()
+    # The browser remembers this search itself; the team's saved search (see save_search) stays as it is.
+    company["used_tags"] = list(dict.fromkeys([*body.tags, *company.get("used_tags", [])]))[:60]
     job = _new_job(company_id, platforms, markets, _size_range(company, body, platforms), all_markets=all_markets,
                    focus=body.focus.strip(), tags=body.tags, deal_types=body.deal_types, avoid=body.avoid,
                    example_creators=body.example_creators)
