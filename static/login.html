@@ -3,15 +3,28 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Scout · Log in</title>
+  <title>Prenew Scout · Log in</title>
+  <meta name="description" content="Find the small, local creators your team would otherwise scroll for by hand, scored with the evidence behind every number.">
+  <meta name="theme-color" content="#105c40">
+  <meta property="og:title" content="Prenew Scout">
+  <meta property="og:description" content="Find the small, local creators your team would otherwise scroll for by hand, scored with the evidence behind every number.">
+  <meta property="og:image" content="/static/og.png">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <script>
+    try { document.documentElement.dataset.theme = localStorage.getItem("scout.theme") === "dark" ? "dark" : "light"; }
+    catch { document.documentElement.dataset.theme = "light"; }
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Titillium+Web:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body class="login-page">
   <form class="login-card" id="login-form">
-    <span class="brand-name"><span class="brand-co">prenew </span>scout</span>
+    <span class="brand-name"><span class="brand-co">prenew </span>Scout</span>
+    <p class="login-tag">Find the small, local creators your team would otherwise scroll for by hand.</p>
     <h1>Log in</h1>
     <p class="hint">Enter your team's Scout password.</p>
     <input type="text" name="username" value="Prenew Scout" autocomplete="username" hidden>

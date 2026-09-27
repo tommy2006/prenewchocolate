@@ -28,24 +28,23 @@
   --viz-muted: #8a8a93;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111113;
-    --surface: #19191c;
-    --surface-2: #232327;
-    --text: #efeff2;
-    --muted: #a0a0aa;
-    --line: #2e2e34;
-    --accent-soft: #3a1d17;
-    --good-bg: #16301f;
-    --good-ink: #86efac;
-    --warn-bg: #3a2c10;
-    --warn-ink: #fcd34d;
-    --low-bg: #2a2a2f;
-    --sel: #1d2437;
-    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 28px rgba(0, 0, 0, .45);
-    --viz-1: #3987e5;
-  }
+/* Dark only when chosen with the theme switch (html[data-theme="dark"]); light projects better, so it's the default */
+:root[data-theme="dark"] {
+  --bg: #111113;
+  --surface: #19191c;
+  --surface-2: #232327;
+  --text: #efeff2;
+  --muted: #a0a0aa;
+  --line: #2e2e34;
+  --accent-soft: #3a1d17;
+  --good-bg: #16301f;
+  --good-ink: #86efac;
+  --warn-bg: #3a2c10;
+  --warn-ink: #fcd34d;
+  --low-bg: #2a2a2f;
+  --sel: #1d2437;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 28px rgba(0, 0, 0, .45);
+  --viz-1: #3987e5;
 }
 
 * { box-sizing: border-box; }
@@ -395,7 +394,7 @@ th.num { text-align: right; }
 .tag.partner { background: var(--good-bg); color: var(--good-ink); }
 .tag.gem { background: #e8efff; color: #1d4ed8; }
 .tag.deep { background: var(--text); color: var(--bg); }
-@media (prefers-color-scheme: dark) { .tag.gem { background: #1e2a4a; color: #93b4ff; } }
+:root[data-theme="dark"] .tag.gem { background: #1e2a4a; color: #93b4ff; }
 
 .star { border: 0; background: none; cursor: pointer; color: var(--muted); display: inline-grid; place-items: center; padding: 3px; border-radius: 6px; }
 .star:hover { color: var(--text); background: var(--surface-2); }
@@ -954,8 +953,9 @@ html[data-ui="modern"] .recall { border-radius: 16px; }
 
 
 /* ======================================================================================================
-   Modern look (html[data-ui="modern"]): clean and white, bold geometric type, orange pill buttons,
-   big rounded images; follows the computer's dark mode. It is the only look: it builds on the base styles above.
+   Modern look (html[data-ui="modern"]): clean and white, bold geometric type, pill buttons, big rounded images;
+   dark with the theme switch. It is the only look: it builds on the base styles above. Prenew's own colours and
+   type are layered on top at the end of this file.
    ====================================================================================================== */
 html[data-ui="modern"] {
   color-scheme: light;
@@ -992,8 +992,7 @@ html[data-ui="modern"] {
   --gem-ink: #3730a3;
   --quick-track: #c9c7c1;
 }
-@media (prefers-color-scheme: dark) {
-  html[data-ui="modern"] {
+html[data-ui="modern"][data-theme="dark"] {
     color-scheme: dark;
     --bg: #111216;
     --surface: #18191e;
@@ -1021,7 +1020,6 @@ html[data-ui="modern"] {
     --gem-bg: #1e2547;
     --gem-ink: #a5b4fc;
     --quick-track: #55565e;
-  }
 }
 html[data-ui="modern"] body { font-family: "Plus Jakarta Sans", "Inter", system-ui, sans-serif; background: var(--bg); }
 
@@ -1192,3 +1190,177 @@ html[data-ui="modern"] .field textarea, html[data-ui="modern"] .field input[type
 .login-field input:focus { outline: none; border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 4px var(--accent-soft); }
 .login-card .btn { height: 46px; font-size: 15px; }
 .login-error { margin: 0; color: var(--bad); font-size: 13.5px; }
+
+/* ======================================================================================================
+   Prenew brand (colours and type from prenew.com): a forest-green top bar with the PRENEW word mark, green
+   actions (mint in dark mode), Sora headlines and Titillium Web text. Light by default: it projects well.
+   ====================================================================================================== */
+html[data-ui="modern"] {
+  --brand: #105c40;              /* Prenew forest green */
+  --mint: #9df69a;               /* Prenew's button mint */
+  --mint-ink: #1d1d35;
+  --bg: #f8f8ff;
+  --surface: #ffffff;
+  --surface-2: #f0f1f7;
+  --text: #1d1d35;               /* Prenew ink */
+  --muted: #4a4a5d;              /* darker than before: readable from the back of a room */
+  --line: #e2e3ec;
+  --accent: #105c40;
+  --accent-ink: #ffffff;
+  --accent-hover: #0b4a33;
+  --accent-soft: #e5f7e8;
+  --accent-ink-soft: #0f5a3e;
+  --sel: #eef9f0;
+  --tile: #f5f5fb;
+  --seg-on: #ffffff;
+  --font-display: "Sora", "Titillium Web", system-ui, sans-serif;
+  --font-body: "Titillium Web", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+html[data-ui="modern"][data-theme="dark"] {
+  --brand: #0c3f2c;
+  --bg: #0c1310;
+  --surface: #121b17;
+  --surface-2: #1a2520;
+  --text: #edf3ef;
+  --muted: #a7b5ae;
+  --line: #243229;
+  --accent: #9df69a;
+  --accent-ink: #0c1310;
+  --accent-hover: #b6f9b3;
+  --accent-soft: #173024;
+  --accent-ink-soft: #9df69a;
+  --sel: #173024;
+  --tile: #17211d;
+  --chip: rgba(18, 27, 23, .9);
+  --seg-on: #28362f;
+}
+html[data-ui="modern"] body { font-family: var(--font-body); font-size: 15px; }
+html[data-ui="modern"] :is(h1, h2, h3, h4, .scorecard strong, .kpi b, .search-row > .btn) { font-family: var(--font-display); }
+
+/* Top bar */
+html[data-ui="modern"] .topbar { background: var(--brand); border-bottom: 0; backdrop-filter: none; }
+html[data-ui="modern"] .brand-name {
+  flex-direction: row; align-items: baseline; gap: 7px; font-family: var(--font-display); font-weight: 600; font-size: 19px;
+  line-height: 1; letter-spacing: -.01em; text-transform: none; color: var(--text);
+}
+html[data-ui="modern"] .brand-co { font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--brand); }
+html[data-ui="modern"] .topbar .brand-name { color: #fff; }
+html[data-ui="modern"] .topbar .brand-co { color: var(--mint); }
+html[data-ui="modern"] .topbar .tab { color: rgba(255, 255, 255, .8); font-weight: 600; }
+html[data-ui="modern"] .topbar .tab:hover, html[data-ui="modern"] .topbar .tab.on { color: #fff; background: rgba(255, 255, 255, .14); }
+html[data-ui="modern"] .count, html[data-ui="modern"] .fbtn .count { background: var(--accent); color: var(--accent-ink); }
+html[data-ui="modern"] .topbar .count { background: var(--mint); color: var(--mint-ink); }
+html[data-ui="modern"] .topbar :is(.company-btn, .icon-btn) { color: #fff; background: transparent; border-color: rgba(255, 255, 255, .3); }
+html[data-ui="modern"] .topbar :is(.company-btn, .icon-btn):hover:not(:disabled) { color: #fff; border-color: #fff; background: rgba(255, 255, 255, .1); }
+html[data-ui="modern"] .topbar .menu { color: var(--text); }
+.theme-btn .ico-sun { display: none; }
+html[data-theme="dark"] .theme-btn .ico-sun { display: block; }
+html[data-theme="dark"] .theme-btn .ico-moon { display: none; }
+
+/* Buttons: one strong action per screen, in Prenew green (mint in dark mode) */
+html[data-ui="modern"] .btn.primary {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700;
+  box-shadow: 0 6px 16px rgba(16, 92, 64, .22);
+}
+html[data-ui="modern"] .btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); box-shadow: 0 8px 20px rgba(16, 92, 64, .28); }
+html[data-ui="modern"] .btn.primary:active:not(:disabled) { box-shadow: 0 3px 8px rgba(16, 92, 64, .22); }
+html[data-ui="modern"][data-theme="dark"] .btn.primary { box-shadow: 0 6px 16px rgba(157, 246, 154, .14); }
+
+/* Posters: fewer, bigger cards with darker secondary text */
+html[data-ui="modern"] .posters { grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 32px 20px; }
+html[data-ui="modern"] .mcard h3 { font-size: 17px; font-weight: 700; }
+html[data-ui="modern"] :is(.mmeta, .mviews, .msum) { font-size: 13.5px; }
+html[data-ui="modern"] .msum { line-height: 1.45; }
+.mpill.like, .tag.like { background: var(--accent-soft); color: var(--accent-ink-soft); }
+.mpill.rising { background: var(--warn-bg); color: var(--warn-ink); }
+
+/* "How to read the scores": one small tip instead of a line of legend text */
+.legend-help {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px 3px 4px; border-radius: 999px;
+  background: var(--surface-2); color: var(--muted); font-size: 12.5px; cursor: help;
+}
+.legend-help .q {
+  width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center;
+  background: var(--surface); color: var(--text); font-weight: 700; font-size: 11px;
+}
+
+/* Proof on the team's own data: the past partners Scout found by itself */
+.proof {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px 28px; margin: 22px 0 4px; padding: 18px 22px;
+  border-radius: 20px; background: var(--accent-soft); color: var(--text);
+}
+.proof-main { flex: 1 1 440px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.proof-kicker { font-size: 12px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--accent-ink-soft); }
+.proof-line { margin: 0; font-size: 16.5px; line-height: 1.4; }
+.proof-line b { font-family: var(--font-display); font-weight: 700; letter-spacing: -.01em; }
+.proof-names { display: flex; flex-wrap: wrap; gap: 6px; }
+.proof-name {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 999px; border: 0;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer;
+}
+.proof-name:hover { box-shadow: 0 0 0 2px var(--accent); }
+.proof-name small { color: var(--accent-ink-soft); font-weight: 700; font-size: 12.5px; }
+.proof-stats { display: flex; flex-wrap: wrap; gap: 10px 26px; }
+.proof-stat { display: flex; flex-direction: column; line-height: 1.1; }
+.proof-stat b { font-family: var(--font-display); font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+.proof-stat span { font-size: 12.5px; color: var(--muted); }
+.proof-like { flex-basis: 100%; margin: 0; font-size: 13.5px; color: var(--muted); }
+.proof-like b { color: var(--text); }
+
+/* Example searches under the search bar (gone once something is typed) */
+.try-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 12px 0 2px; font-size: 13px; color: var(--muted); }
+.try-row > span { font-weight: 600; margin-right: 2px; }
+.try-row button {
+  height: 30px; padding: 0 13px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.try-row button:hover { border-color: var(--accent); color: var(--accent-ink-soft); background: var(--accent-soft); }
+
+/* Loading: placeholder posters instead of an empty page, and a quiet dim while the list refreshes */
+#grid.is-loading { opacity: .55; transition: opacity .15s; pointer-events: none; }
+.sk { position: relative; overflow: hidden; background: var(--surface-2); border-radius: 10px; }
+.sk::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .5), transparent); animation: sk-shine 1.2s infinite;
+}
+html[data-theme="dark"] .sk::after { background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .06), transparent); }
+@keyframes sk-shine { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .sk::after { animation: none; } }
+.sk-card { display: flex; flex-direction: column; gap: 10px; }
+.sk-img { aspect-ratio: 4 / 5; border-radius: 20px; }
+.sk-line { height: 13px; }
+.sk-line.w80 { width: 80%; }
+.sk-line.w60 { width: 60%; }
+.d-skeleton { display: grid; grid-template-columns: 300px 1fr; gap: 28px; padding: 28px; min-height: 560px; }
+.d-skeleton .sk-img { border-radius: 24px; }
+.d-skeleton .col { display: flex; flex-direction: column; gap: 14px; padding-top: 6px; }
+.d-skeleton .sk-title { height: 36px; width: 55%; }
+.d-skeleton .sk-block { height: 92px; border-radius: 20px; }
+
+/* Creator window: contact and the first message right under the verdict (the outreach moment) */
+.contact-top { margin: 16px 0 0; padding: 10px 12px 10px 14px; border-radius: 16px; background: var(--tile); }
+.contact-top .draft-btn { margin-left: auto; }
+
+/* Touch screens: no keyboard hints */
+@media (hover: none), (pointer: coarse) { .kbd-help, .search kbd { display: none; } }
+
+/* Phones: the posters come first; the filters wait behind one button */
+.filters-toggle { display: none; }
+@media (max-width: 700px) {
+  .filters-toggle { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; }
+  .filterbar:not(.open) { display: none; }
+  .filterbar.open { margin-top: 10px; }
+  .results-head #view-mode, .results-head .downloads { display: none; }
+  .proof { padding: 14px 16px; gap: 10px; }
+  .proof-line { font-size: 15px; }
+  .proof-names, .proof-like { display: none; }  /* the headline and the numbers are enough on a phone */
+  .proof-stat b { font-size: 20px; }
+  .results-head :is(#plan-btn, #map-btn) { display: none; }   /* planning and market maps are desk jobs */
+  .try-row { display: none; }
+  .d-skeleton { grid-template-columns: 1fr; padding: 16px; }
+  .d-skeleton .sk-img { width: 120px; }
+}
+
+/* Login: the same brand */
+.login-card .brand-name { font-size: 22px; }
+.login-card .login-tag { margin: -6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.45; }

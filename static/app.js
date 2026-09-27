@@ -7,18 +7,24 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 
 async function api(path, { method = "GET", body } = {}) {
   const raw = body instanceof Blob; // a file upload is sent as-is
-  const r = await fetch(path, {
-    method,
-    headers: body && !raw ? { "Content-Type": "application/json" } : {},
-    body: raw ? body : body ? JSON.stringify(body) : undefined,
-  });
+  let r;
+  try {
+    r = await fetch(path, {
+      method,
+      headers: body && !raw ? { "Content-Type": "application/json" } : {},
+      body: raw ? body : body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error("Can't reach Scout right now. Check your connection and try again.");
+  }
   if (r.status === 401) {  // logged out (or the login expired): the page itself shows the login
     location.assign("/");
     throw new Error("Log in to Scout first");
   }
   if (!r.ok) {
-    let msg = r.statusText;
-    try { msg = (await r.json()).detail || msg; } catch { /* not JSON */ }
+    let msg = "";
+    try { msg = (await r.json()).detail || ""; } catch { /* not JSON: a proxy error page */ }
+    if (!msg) msg = r.status >= 500 ? "Scout's server is busy or restarting. Try again in a minute." : r.statusText || "Something went wrong";
     throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
   }
   return r.json();
@@ -145,6 +151,29 @@ const S = {
   recent: null,
 };
 
+// Filters are kept per browser, so several people using Scout at once don't overwrite each other's view.
+// The team's saved search on the server stays the starting point for anyone who hasn't changed anything yet.
+const filterKey = (companyId) => `scout.filters.${companyId}`;
+function localFilters(companyId) {
+  try { return JSON.parse(localStorage.getItem(filterKey(companyId)) || "{}"); } catch { return {}; }
+}
+
+// Light by default because it projects well; the sun/moon button in the top bar switches and remembers.
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem("scout.theme", theme); } catch { /* storage blocked */ }
+  const b = $("#theme-btn");
+  if (b) {
+    b.title = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+    b.setAttribute("aria-label", b.title);
+  }
+}
+
+// Example searches under the search bar: one click shows what the plain-words search understands.
+const TRY_SEARCHES = {
+  co_prenew: ["Finnish Fortnite TikTokers", "Estonian Minecraft creators", "Hidden gems in Latvia", "Swedish gaming YouTubers with email"],
+};
+
 // ---------- Small controls ----------
 function chipSelect(root, options, selected, onChange) {
   const sel = new Set(selected);
@@ -219,7 +248,7 @@ function setCompany(company) {
   try { localStorage.setItem("scout.company", company.id); } catch { /* storage blocked */ }
   $("#company-name").textContent = company.name;
   $("#export-csv").href = `/api/companies/${company.id}/export?status=shortlist&format=xlsx`;
-  S.f = { ...DEFAULT_FILTERS, ...(company.search || {}) };
+  S.f = { ...DEFAULT_FILTERS, ...(company.search || {}), ...localFilters(company.id) };
   // Older saved searches used size chips; turn them into a slider range once.
   if (S.f.tiers?.length && S.f.follower_min == null && S.f.follower_max == null) {
     const picked = S.meta.tiers.filter((t) => S.f.tiers.includes(t.key));
@@ -238,6 +267,7 @@ function setCompany(company) {
   closeDetail();
   renderFilters();
   refresh();
+  renderProof();
   stopPolling();
   $("#job").hidden = true;
   resumeJob();
@@ -302,6 +332,7 @@ function renderFilters() {
   const scoutOk = S.meta.ai.web_search;
   $("#c-scout").disabled = !scoutOk;
   $("#c-scout-note").textContent = scoutOk ? "" : " Needs a Claude key in Settings (as the search or writing AI).";
+  renderTry();
 }
 
 function renderTagPicker() {
@@ -355,6 +386,11 @@ function updateAdvCount() {
     + (S.f.has_email ? 1 : 0) + (S.f.gems ? 1 : 0) + (S.f.growing ? 1 : 0) + (S.f.show_hidden ? 1 : 0);
   $("#adv-count").hidden = !n;
   $("#adv-count").textContent = n;
+  // Phones: how many filters are on, next to the button that shows them
+  const all = n + S.f.tags.length + S.f.markets.length + (S.f.platforms.length ? 1 : 0)
+    + (S.f.follower_min || S.f.follower_max != null || S.f.size_preset ? 1 : 0);
+  $("#filters-count").hidden = !all;
+  $("#filters-count").textContent = all;
 }
 
 // ---------- Size ----------
@@ -466,13 +502,10 @@ async function suggestTags(button) {
   if ($("#tag-pop") && !$("#tag-pop").hidden) $("#tag-pop").innerHTML = tagPopHtml();
 }
 
-let saveTimer;
-// Search criteria changed: remember them for this company, and refresh the list.
+// Search criteria changed: remember them for this company in this browser, and refresh the list.
 function searchChanged({ reload = true } = {}) {
-  clearTimeout(saveTimer);
   const body = Object.fromEntries(Object.keys(DEFAULT_SEARCH).map((k) => [k, S.f[k]]));
-  S.company.search = body;
-  saveTimer = setTimeout(() => api(`/api/companies/${S.company.id}/search`, { method: "PUT", body }).catch(() => {}), 400);
+  try { localStorage.setItem(filterKey(S.company.id), JSON.stringify(body)); } catch { /* storage blocked */ }
   if (reload) filtersChanged();
   else updateAdvCount();
 }
@@ -599,14 +632,25 @@ function queryString(extra = {}) {
   return p.toString();
 }
 
+// Placeholder posters while the first list loads, so the page never starts empty.
+const skeletonPosters = (n = 10) => `<div class="posters">${Array.from({ length: n }, () =>
+  '<div class="sk-card" aria-hidden="true"><div class="sk sk-img"></div><div class="sk sk-line w80"></div><div class="sk sk-line w60"></div></div>').join("")}</div>`;
+
 async function loadCreators({ quiet = false } = {}) {
   if (!S.company) return;
+  const grid = $("#grid");
+  const first = !grid.querySelector(".posters, .table-wrap, .empty");
+  if (first) grid.innerHTML = skeletonPosters();
+  const dim = first ? 0 : setTimeout(() => grid.classList.add("is-loading"), 150);  // only if it's slow
   let data;
   try {
     data = await api(`/api/companies/${S.company.id}/creators?${queryString()}`);
   } catch (e) {
     if (!quiet) toast(e.message, "err");
     return;
+  } finally {
+    clearTimeout(dim);
+    grid.classList.remove("is-loading");
   }
   S.page = data.page;
   const keep = S.rows[S.cursor]?.id;
@@ -680,11 +724,15 @@ const nameLink = (c) => `<a href="#" class="cname" data-stats="${esc(c.id)}" tit
 // Modern look: a big clean image, the text and scores below it (like an article card).
 function modernCardHtml(c, i) {
   const starred = c.status && c.status !== "hidden";
-  const img = c.cover ? `<img src="${esc(c.cover)}" alt="" loading="lazy" data-name="${esc(c.name)}">` : placeholder(c.name);
+  const fallback = c.avatar && c.avatar !== c.cover ? ` data-fallback="${esc(c.avatar)}"` : "";  // see checkPoster()
+  const img = c.cover ? `<img src="${esc(c.cover)}" alt="" loading="lazy" data-name="${esc(c.name)}"${fallback}>` : placeholder(c.name);
   const meta = [`${fmtNum(c.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}`, S.meta.markets[c.country]?.name || c.country, c.niche].filter(Boolean).join(" · ");
   const score = (label, value, kind) => `<span class="mscore" data-tip="${esc(c.tips?.[kind] || "")}">${ringHtml(value, "sm", { quick: c.checked === "rules" })}
     <span><b>${label}</b></span></span>`;
-  const tags = `${c.hidden_gem ? `<span class="mpill gem" ${tipAttr("gem", c)}>Hidden gem</span>` : ""}${c.partner ? `<span class="mpill partner" ${tipAttr("partner", c)}>Past partner</span>` : ""}${c.checked === "deep" ? `<span class="mpill" ${tipAttr("deep", c)}>✦ Evaluated</span>` : ""}`;
+  const like = !c.partner && c.likeness?.like?.length && c.likeness.score >= 60
+    ? `<span class="mpill like" data-tip="${esc(`Like your partners · ${c.likeness.score}\nSimilar to ${c.likeness.like.join(" and ")}: games, size, market and platform`)}">Like ${esc(c.likeness.like[0])}</span>` : "";
+  const rising = c.rising ? `<span class="mpill rising" data-tip="${esc(`Rising\nViews up ${c.views_trend != null ? Math.round(c.views_trend * 100) + "%" : "sharply"} in the last 30 days, and a good fit: worth booking before they get expensive`)}">↑ Rising</span>` : "";
+  const tags = `${c.hidden_gem ? `<span class="mpill gem" ${tipAttr("gem", c)}>Hidden gem</span>` : ""}${c.partner ? `<span class="mpill partner" ${tipAttr("partner", c)}>Past partner</span>` : ""}${rising}${like}${c.checked === "deep" ? `<span class="mpill" ${tipAttr("deep", c)}>✦ Evaluated</span>` : ""}`;
   return `<article class="card mcard ${i === S.cursor ? "cur" : ""} ${S.panelId === c.id ? "open" : ""}" data-id="${esc(c.id)}" data-i="${i}" tabindex="0" aria-label="${esc(c.name)}, fit ${c.fit}, quality ${c.quality}">
     <div class="mcard-img">${img}
       <span class="mplat plat-${c.platform}" title="${esc(S.meta.platforms[c.platform])}">${ICONS[c.platform]}</span>
@@ -702,6 +750,62 @@ function modernCardHtml(c, i) {
 }
 
 const cardHtml = modernCardHtml;
+
+// A near-black video frame looks like a broken image on a projector: show the profile picture instead.
+function checkPoster(img) {
+  if (img.dataset.checked) return;
+  img.dataset.checked = "1";
+  try {
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = 12;
+    const ctx = cv.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, 12, 12);
+    const px = ctx.getImageData(0, 0, 12, 12).data;
+    let lum = 0;
+    for (let i = 0; i < px.length; i += 4) lum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+    if (lum / (px.length / 4) < 30) { img.src = img.dataset.fallback; img.classList.add("is-avatar"); }
+  } catch { /* an image from another site can't be read: keep it */ }
+}
+
+// ---------- Proof on the team's own data ----------
+// Past partners Scout found with its own searches (before it saw the tracker), and what's in the library.
+// Only real numbers: the strip stays hidden until a tracker has been imported and checked.
+async function renderProof() {
+  const el = $("#proof");
+  const co = S.company;
+  el.hidden = true;
+  if (!co?.partners) return;
+  const count = (filter) => api(`/api/companies/${co.id}/creators?page_size=1&${filter}`).then((r) => r.total).catch(() => null);
+  const [recall, total, withEmail, gems, profile] = await Promise.all([
+    api(`/api/companies/${co.id}/recall`).catch(() => null), count(""), count("has_email=true"), count("gems=true"),
+    api(`/api/companies/${co.id}/partner-profile`).catch(() => null)]);
+  if (S.company !== co) return;  // switched company meanwhile
+  const sort = $("#f-sort");
+  if (profile?.partners && !sort.querySelector('option[value="likeness"]')) {
+    sort.options[0].insertAdjacentHTML("afterend", '<option value="likeness">Most like your partners</option>');
+    sort.value = S.f.sort;
+  }
+  if (!recall?.found) return;
+  const near = (recall.rows || []).filter((r) => r.rank && r.rank <= 10).sort((a, b) => a.rank - b.rank);
+  const stat = (n, label) => (n == null ? "" : `<div class="proof-stat"><b>${fmtNum(n)}</b><span>${label}</span></div>`);
+  el.innerHTML = `
+    <div class="proof-main">
+      <span class="proof-kicker">Checked against your own tracker</span>
+      <p class="proof-line"><b>Scout found ${recall.found} of your ${recall.partners} past partners with its own searches</b>${near.length > 1
+        ? `, and ranked ${near.length} of them in its top ${near.at(-1).rank} of ${recall.library}` : ""}.</p>
+      ${near.length ? `<div class="proof-names">${near.map((r) => `<button type="button" class="proof-name" data-open="${esc(r.id)}" title="Open ${esc(r.name)}">${esc(r.name)} <small>#${r.rank}</small></button>`).join("")}</div>` : ""}
+    </div>
+    <div class="proof-stats">${stat(recall.library ?? total, "creators ranked")}${stat(withEmail, "with an email")}${stat(gems, "hidden gems")}</div>
+    ${profile?.summary ? `<p class="proof-like"><b>What your partners have in common:</b> ${esc(profile.summary)}</p>` : ""}`;
+  el.hidden = false;
+}
+
+function renderTry() {
+  const el = $("#try-row");
+  const list = TRY_SEARCHES[S.company?.id] || [];
+  el.innerHTML = list.length ? `<span>Try</span>${list.map((t) => `<button type="button" data-try="${esc(t)}">${esc(t)}</button>`).join("")}` : "";
+  el.hidden = !list.length || !!$("#q").value.trim();
+}
 
 function renderResults(data) {
   const grid = $("#grid");
@@ -735,13 +839,15 @@ function renderResults(data) {
       + (filtered ? ` · <button class="btn link" data-act="reset-filters">Clear filters</button>` : "");
     if (!data.items.length) {
       grid.innerHTML = `<div class="empty"><h2>Nothing saved matches this</h2><p>Press <b>Find new creators</b> to search the platforms for exactly this, or clear the filters.</p>
-        <button class="btn primary" data-act="find">Find new creators</button> <button class="btn" data-act="reset-filters">Clear filters</button></div>`;
+        <button class="btn accent" data-act="find">Find new creators</button> <button class="btn" data-act="reset-filters">Clear filters</button></div>`;
       $("#pager").innerHTML = "";
       return;
     }
   }
-  const legend = `<p class="legend"><span><b>Fit</b>: how well they suit ${esc(S.company.name)}</span><span><b>Quality</b>: are their viewers real and engaged</span>
-      <span class="legend-ring">${ringHtml(70, "xs", { quick: true })} dashed ring = quick estimate, not yet read by AI</span><span>Hover a score to see why · click a creator for details</span></p>`;
+  const legendTip = ["How to read the scores", `Fit: how well they suit ${S.company.name}: content, audience, market, brand and price`,
+    "Quality: whether their viewers are real, engaged and still growing", "A dashed ring is a quick estimate the AI hasn't checked yet",
+    "Hover a score for the reasons, or click a creator for everything"].join("\n");
+  const legend = `<p class="legend"><span class="legend-help" tabindex="0" data-tip="${esc(legendTip)}"><span class="q">?</span>How to read the scores</span></p>`;
   if (S.mode === "cards" || window.innerWidth < 700) {  // a table doesn't fit a phone
     grid.className = "";
     grid.innerHTML = legend + `<div class="posters">${data.items.map(cardHtml).join("")}</div>`;
@@ -897,7 +1003,10 @@ async function openDetail(id) {
   const dlg = $("#detail");
   if (!dlg.open) dlg.showModal();
   $$("#grid [data-id]").forEach((el) => el.classList.toggle("open", el.dataset.id === id));
-  if (!S.panelData || S.panelData.card.id !== id) dlg.innerHTML = `<div class="loading-line" style="padding:40px"><span class="spinner"></span>Loading…</div>`;
+  if (!S.panelData || S.panelData.card.id !== id) {
+    dlg.innerHTML = `<div class="d-skeleton" aria-busy="true" aria-label="Loading"><div class="sk sk-img"></div>
+      <div class="col"><div class="sk sk-title"></div><div class="sk sk-line w60"></div><div class="sk sk-block"></div><div class="sk sk-block"></div><div class="sk sk-line w80"></div></div></div>`;
+  }
   try {
     const d = await api(`/api/companies/${S.company.id}/creators/${encodeURIComponent(id)}`);
     if (S.panelId !== id) return; // moved on meanwhile
@@ -1022,7 +1131,8 @@ function renderDetail(d) {
             <h2>${nameLink(c)}</h2>
             <div class="d-sub"><span class="plat-inline plat-${c.platform}">${ICONS[c.platform]}</span><a href="${esc(cr.url)}" target="_blank" rel="noopener">${esc(cr.handle || platform)}</a>
               <span>${fmtNum(cr.followers)} ${c.platform === "youtube" ? "subscribers" : "followers"}</span>${country ? `<span>${esc(country)}</span>` : ""}${lang ? `<span>${esc(lang)}</span>` : ""}</div>
-            <div class="d-badges">${badges(c, { partner: false })}${partner ? `<span class="tag partner" ${tipAttr("partner", c)}>🤝 Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? `<span class="tag" ${tipAttr("hidden", c)}>Hidden</span>` : ""}</div>
+            <div class="d-badges">${badges(c, { partner: false })}${partner ? `<span class="tag partner" ${tipAttr("partner", c)}>🤝 Worked with you${partner.weeks.length ? ": " + esc(partner.weeks.join(", ")) : ""}</span>` : ""}${m.status === "hidden" ? `<span class="tag" ${tipAttr("hidden", c)}>Hidden</span>` : ""}${
+              !partner && d.likeness?.like?.length && d.likeness.score >= 60 ? `<span class="tag like" data-tip="${esc(`Like your partners · ${d.likeness.score}\n${d.likeness.why || `Similar to ${d.likeness.like.join(" and ")}`}`)}">Like ${esc(d.likeness.like.join(" & "))}</span>` : ""}</div>
           </div>
           <div class="d-nav">
             <button class="icon-btn small" data-act="panel-prev" ${i <= 0 ? "disabled" : ""} title="Previous creator (↑)">${ICONS.up}</button>
@@ -1037,6 +1147,16 @@ function renderDetail(d) {
             ${m.audience_note ? `<dt>Audience</dt><dd>${esc(m.audience_note)}</dd>` : ""}
             ${m.collab_idea ? `<dt>Idea</dt><dd>${esc(m.collab_idea)}</dd>` : ""}
             ${m.deep?.sponsors_seen?.length ? `<dt>Sponsors</dt><dd>${esc(m.deep.sponsors_seen.join(", "))}</dd>` : ""}</dl>` : ""}
+
+          <div class="contact-line contact-top">${ICONS.mail}
+            ${firstEmail ? `<code>${esc(firstEmail)}</code><button class="btn small" data-act="copy" data-text="${esc(firstEmail)}">${ICONS.copy} Copy</button>`
+                + (cr.email_sources?.[firstEmail] ? `<span class="muted small" title="Not in their bio: Scout found it on this page">found on ${esc(cr.email_sources[firstEmail])}</span>` : "")
+              : `<span class="muted">No public email. ${esc(c.contact_via && c.contact_via !== "No public contact" ? `Send a ${c.contact_via}` : `Message them on ${platform}`)}.</span>`
+                + (cr.contacts_checked ? "" : `<button class="btn small" data-act="panel-contacts" title="Look on their link page, website and YouTube channel links">Find email</button>`)}
+            ${agency ? `<span class="tag" ${tipAttr("agency", c)}>Likely via agency</span>` : ""}
+            ${Object.entries(cr.socials || {}).map(([k, l]) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS[k] || ICONS.ext} ${esc(k[0].toUpperCase() + k.slice(1))}</a>`).join("")}
+            ${S.meta.sources.ai || m.pitch ? `<button class="btn small accent draft-btn" data-act="pitch-top">${ICONS.mail} ${m.pitch ? "Read the first message" : `Draft a message in ${esc(lang || "their language")}`}</button>` : ""}
+          </div>
 
           <div class="d-scores">
             <div class="scorecard" data-tip="${esc(x.fit || "")}">${ringHtml(m.fit, "lg", { quick: m.checked === "rules" })}
@@ -1070,15 +1190,6 @@ function renderDetail(d) {
                 <span class="vid-meta">${p.views != null ? fmtNum(p.views) + " views" : fmtNum(p.likes) + " likes"}${p.is_short ? " · Short" : ""}</span>
               </button>`).join("")}</div>
           </div>` : ""}
-
-          <div class="contact-line">${ICONS.mail}
-            ${firstEmail ? `<code>${esc(firstEmail)}</code><button class="btn small" data-act="copy" data-text="${esc(firstEmail)}">${ICONS.copy} Copy</button>`
-                + (cr.email_sources?.[firstEmail] ? `<span class="muted small" title="Not in their bio: Scout found it on this page">found on ${esc(cr.email_sources[firstEmail])}</span>` : "")
-              : `<span class="muted">No public email. ${esc(c.contact_via && c.contact_via !== "No public contact" ? `Send a ${c.contact_via}` : `Message them on ${platform}`)}.</span>`
-                + (cr.contacts_checked ? "" : `<button class="btn small" data-act="panel-contacts" title="Look on their link page, website and YouTube channel links">Find email</button>`)}
-            ${agency ? `<span class="tag" ${tipAttr("agency", c)}>Likely via agency</span>` : ""}
-            ${Object.entries(cr.socials || {}).map(([k, l]) => `<a class="btn small" href="${esc(l)}" target="_blank" rel="noopener">${ICONS[k] || ICONS.ext} ${esc(k[0].toUpperCase() + k.slice(1))}</a>`).join("")}
-          </div>
 
           <p class="conf conf-${conf.level}"><span class="dotc"></span>How sure we are: <b>${esc(conf.level)}</b>${conf.notes.length ? ` · ${esc(conf.notes.join(" · "))}` : ""}
             ${m.checked === "rules" && S.meta.sources.ai ? ` <button class="btn link" data-act="ai-check">Let ${esc(S.meta.ai.label)} read their posts</button>` : ""}</p>
@@ -1898,6 +2009,7 @@ function bindEvents() {
   });
   q.addEventListener("focus", showRecent);
   q.addEventListener("input", () => {
+    renderTry();
     if (!q.value.trim()) {
       showRecent();
       if (S.f.q) { S.f.q = ""; $("#understood").hidden = true; filtersChanged({ debounce: true }); }
@@ -1920,6 +2032,20 @@ function bindEvents() {
   $("#size-lo").addEventListener("input", () => sizeFromSlider("lo"));
   $("#size-hi").addEventListener("input", () => sizeFromSlider("hi"));
   $("#company-btn").addEventListener("click", (e) => { e.stopPropagation(); toggleCompanyMenu(); });
+  $("#try-row").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-try]");
+    if (!b) return;
+    q.value = b.dataset.try;
+    renderTry();
+    runQuery(b.dataset.try);
+  });
+  $("#filters-toggle").addEventListener("click", () => {
+    const open = $("#filterbar").classList.toggle("open");
+    $("#filters-toggle").setAttribute("aria-expanded", String(open));
+  });
+  $("#proof").addEventListener("click", (e) => { const b = e.target.closest("[data-open]"); if (b) openDetail(b.dataset.open); });
+  // Image load events don't bubble, so listen while they travel down (capture)
+  document.addEventListener("load", (e) => { if (e.target.matches?.(".mcard-img img[data-fallback]")) checkPoster(e.target); }, true);
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && e.target.id === "tag-input" && e.target.value.trim()) {
@@ -2061,6 +2187,12 @@ function bindEvents() {
     if (act === "close") { actEl.closest("dialog")?.close(); }
     else if (act === "go-discover") { e.preventDefault(); showView("discover"); }
     else if (act === "settings") { toggleCompanyMenu(false); openSettings(); }
+    else if (act === "toggle-theme") applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+    else if (act === "pitch-top") {  // the outreach moment, from the top of the creator window
+      const sec = $('#detail details[data-sec="outreach"]');
+      if (sec) { sec.open = true; sec.scrollIntoView({ behavior: "smooth", block: "start" }); }
+      if (!S.pitch && S.meta.sources.ai) draftPitch();
+    }
     else if (act === "find") startFind();
     else if (act === "similar-one") findSimilar("creators", { ids: [S.panelId] });
     else if (act === "similar-liked") { closePops(); findSimilar("liked"); }
@@ -2152,6 +2284,7 @@ function bindEvents() {
 // ---------- Boot ----------
 (async function init() {
   bindEvents();
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
   try { S.mode = localStorage.getItem("scout.layout") || "cards"; } catch { /* storage blocked */ }
   $$("#view-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
   try {
