@@ -530,6 +530,9 @@ async function runQuery(text) {
     await filtersChanged();
     return true;
   }
+  // A new search replaces the previous one instead of stacking on it (a platform or "has email" from the last
+  // search would otherwise quietly hide creators): start again from the filters from before it.
+  if (S.sentQuery && S.undo) S.f = JSON.parse(JSON.stringify(S.undo));
   S.undo = JSON.parse(JSON.stringify(S.f));
   let r;
   try { r = await api(`/api/companies/${S.company.id}/parse-query`, { method: "POST", body: { q: text, ai: false } }); }
@@ -595,6 +598,7 @@ async function showRecent() {
     return `<button type="button" data-recent="${i}"><span>${esc(bits.join(" · "))}</span><small>${ago(j.created_at)}${j.new != null ? ` · ${j.new} found` : ""}</small></button>`;
   }).join("");
   el.hidden = false;
+  document.dispatchEvent(new CustomEvent("scout:recent", { detail: el }));  // add-ons can append a section
 }
 function hideRecent() { $("#recent").hidden = true; }
 
@@ -1077,11 +1081,12 @@ function renderDetail(d) {
   // The summary: the strongest reasons for, the concerns, and what hasn't been checked yet.
   const x = d.explain || { parts: {}, qparts: {} };
   const qn = Object.values(d.quality_notes || {});
-  const pros = ev.filter((e) => e.sign === "+")
+  // The same claim can back several score parts: list it once.
+  const pros = [...new Set(ev.filter((e) => e.sign === "+")
     .sort((a, b) => (b.src === "ai") - (a.src === "ai") || DIM_ORDER.indexOf(a.dim) - DIM_ORDER.indexOf(b.dim))
-    .map((e) => e.text).concat(qn.filter((n) => n.sign === "+").map((n) => n.text)).slice(0, 3);
-  const cons = ev.filter((e) => e.sign === "-").map((e) => e.text)
-    .concat(qn.filter((n) => n.sign === "-").map((n) => n.text)).slice(0, 4);
+    .map((e) => e.text).concat(qn.filter((n) => n.sign === "+").map((n) => n.text)))].slice(0, 3);
+  const cons = [...new Set(ev.filter((e) => e.sign === "-").map((e) => e.text)
+    .concat(qn.filter((n) => n.sign === "-").map((n) => n.text)))].slice(0, 4);
   const unchecked = conf.notes.slice(0, cons.length ? 1 : 2);  // no concerns found can also mean: not looked yet
   const firstEmail = cr.emails?.[0];
 
@@ -1629,6 +1634,8 @@ function renderJob() {
       <ol class="steps">${(job.steps || []).map((s) => `<li class="${s.status}"><span class="dot"></span>${esc(s.label)}${s.detail ? ` <em>· ${esc(s.detail)}</em>` : ""}</li>`).join("")}</ol>
     </details>
     ${job.error ? `<p class="err-line">${esc(job.error)}</p>` : ""}`;
+  // Add-ons (e.g. watches.js: "Repeat this search") put their buttons into #job .job-top from here
+  document.dispatchEvent(new CustomEvent("scout:job", { detail: job }));
 }
 
 function startPolling() {
