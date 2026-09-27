@@ -7,7 +7,7 @@ import csv
 import io
 import re
 
-from . import linking, partners
+from . import likeness, linking, partners
 from .markets import MARKETS, PLATFORMS
 from .metrics import agency_hint
 
@@ -19,7 +19,7 @@ TRACKER_COLUMNS = [
 EXTRA_COLUMNS = [
     ("Instagram followers", 12), ("Twitch followers", 12), ("Email", 30), ("Contact via", 26), ("YouTube", 34),
     ("TikTok", 34), ("Instagram", 34), ("Twitch", 30),
-    ("Other links", 40), ("Match score", 9), ("Fit", 7), ("Audience quality", 9), ("Confidence", 11),
+    ("Other links", 40), ("Match score", 9), ("Fit", 7), ("Audience quality", 9), ("Like your partners", 10), ("Most like", 24), ("Confidence", 11),
     ("Authenticity", 10), ("Est. price per post (EUR)", 14), ("Views counted over", 20), ("Views trend", 10),
     ("Engagement vs typical", 12), ("Last post (days ago)", 10), ("Risks / red flags", 44),
     ("Why they fit", 60), ("Verdict", 60), ("Summary", 60), ("Collaboration idea", 50), ("Message subject", 32),
@@ -68,6 +68,9 @@ ABOUT = [
     ("First message / Short DM", "Drafted by the AI in the creator's own language (Draft messages on the Shortlist). "
                                  "The short DM fits an Instagram or TikTok inbox. Read them before sending."),
     ("Collaboration idea", "One concrete idea that fits this creator's format, from the deep evaluation or the drafted message."),
+    ("Like your partners / Most like", "0-100: how much this creator is like the past partners Scout found from your tracker "
+                                       "(games or niche, market, platform, size, views, rhythm), and the closest ones. "
+                                       "Separate from Fit: it says you've worked with creators like this before."),
 ]
 
 
@@ -105,7 +108,8 @@ def _platform_label(c: dict) -> str:
     return PLATFORMS[c["platform"]]
 
 
-def _row(primary: dict, m: dict, profs: dict[str, dict], partner: dict | None, extra_matches: list[dict]) -> dict:
+def _row(primary: dict, m: dict, profs: dict[str, dict], partner: dict | None, extra_matches: list[dict],
+         like: dict | None = None) -> dict:
     yt, tt, ig, tw = profs.get("youtube"), profs.get("tiktok"), profs.get("instagram"), profs.get("twitch")
     ordered = [primary] + [p for p in profs.values() if p is not primary]
     country = m.get("country") or primary.get("country") or next((p.get("country") for p in ordered if p.get("country")), "")
@@ -162,6 +166,8 @@ def _row(primary: dict, m: dict, profs: dict[str, dict], partner: dict | None, e
         "Match score": max([m["score"]] + [mm["score"] for mm in extra_matches]),
         "Fit": m.get("fit"),
         "Audience quality": m.get("quality"),
+        "Like your partners": (like or {}).get("score"),
+        "Most like": ", ".join((like or {}).get("like") or []),
         "Confidence": (m.get("confidence") or {}).get("level", ""),
         "Authenticity": (primary.get("authenticity") or {}).get("score"),
         "Est. price per post (EUR)": f"{price['low']}-{price['high']}" if (price := primary.get("price")) else "",
@@ -188,6 +194,7 @@ def build_rows(company: dict, rows: list[tuple[dict, dict]], creators: dict[str,
     group = linking.groups(creators)
     ranked = set(matches)
     idx = partners.index(company)
+    model = likeness.Model(company, creators, matches)
     seen, out = set(), []
     for c, m in rows:
         ids = group.get(c["id"], [c["id"]])
@@ -199,7 +206,7 @@ def build_rows(company: dict, rows: list[tuple[dict, dict]], creators: dict[str,
         profs[c["platform"]] = c
         extra = [matches[i] for i in ids if i != c["id"] and i in matches]
         partner = next((p for p in (partners.find(idx, prof, m) for prof in profs.values()) if p), None)
-        out.append(_row(c, m, profs, partner, extra))
+        out.append(_row(c, m, profs, partner, extra, likeness.card_value(model, c, m)))
     return out
 
 

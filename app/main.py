@@ -13,8 +13,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (audience, auth, config, export as exporter, linking, llm, localai, partners, query, rules, scoring,
-               settings, tracker)
+from . import (audience, auth, config, export as exporter, likeness, linking, llm, localai, partners, query, rules,
+               scoring, settings, tracker)
 from .checks import CheckError, check_youtube
 from .markets import DEAL_TYPES, LANGUAGES, MARKETS, PLATFORMS, SEARCH_PLATFORMS, TIERS
 from .metrics import TYPICAL_RATE, TYPICAL_REACH, agency_hint, content_format, in_range
@@ -383,7 +383,7 @@ def _haystack(c: dict, m: dict) -> str:
     return " ".join(p for p in parts if p).lower()
 
 
-def card(company: dict, c: dict, m: dict, partner_idx: dict | None = None) -> dict:
+def card(company: dict, c: dict, m: dict, partner_idx: dict | None = None, model: "likeness.Model | None" = None) -> dict:
     partner = partners.find(partner_idx if partner_idx is not None else partners.index(company), c, m)
     return {
         "id": c["id"],
@@ -427,6 +427,8 @@ def card(company: dict, c: dict, m: dict, partner_idx: dict | None = None) -> di
         "is_new": m.get("job_id") == company.get("last_job_id"),
         # Worked with this company before (from the imported tracker): their latest week, or True.
         "partner": ((partner["weeks"] or [True])[-1]) if partner else None,
+        # How much they are like the past partners Scout found: {"score", "like": [names]} (None without a tracker).
+        "likeness": likeness.card_value(model, c, m) if model is not None else None,
         "tips": {k: v for k, v in scoring.explain(c, m).items() if k in ("fit", "quality", "fit_word", "quality_word")},
     }
 
@@ -547,7 +549,12 @@ def _rows(company_id: str, f: Filters) -> list[tuple[dict, dict]]:
             if not all(t in hay for t in terms):
                 continue
         rows.append((c, m))
-    rows.sort(key=SORTS.get(f.sort, SORTS["match"]))
+    if f.sort == "likeness":  # most like the past partners first
+        model = likeness.Model(company, store.creators, store.matches.get(company_id, {}))
+        score = {c["id"]: (likeness.card_value(model, c, m) or {}).get("score", 0) for c, m in rows}
+        rows.sort(key=lambda cm: (-score[cm[0]["id"]], -cm[1]["score"]))
+    else:
+        rows.sort(key=SORTS.get(f.sort, SORTS["match"]))
     return rows
 
 
@@ -561,11 +568,12 @@ async def list_creators(company_id: str, f: Annotated[Filters, Depends()], page:
     page = max(1, min(page, pages))
     chunk = rows[(page - 1) * page_size: page * page_size]
     idx = partners.index(company)
+    model = likeness.Model(company, store.creators, store.matches.get(company_id, {}))
     return {
         "total": len(rows),
         "page": page,
         "pages": pages,
-        "items": [card(company, c, m, idx) for c, m in chunk],
+        "items": [card(company, c, m, idx, model) for c, m in chunk],
         "library_size": len(store.matches.get(company_id, {})),
     }
 
@@ -586,8 +594,11 @@ async def creator_detail(company_id: str, creator_id: str):
     ids = linking.groups(store.creators).get(creator_id, [creator_id])
     others = [o for o in linking.profiles(ids, store.creators).values() if o["id"] != creator_id and o["platform"] != c["platform"]]
     partner = partners.find(partners.index(company), c, m)
+    model = likeness.Model(company, store.creators, store.matches.get(company_id, {}))
     return {
-        "card": card(company, c, m),
+        "card": card(company, c, m, model=model),
+        # "Like Kakkuh and Jyksedi: Minecraft, Finland, a similar size" (None without a looked-up tracker).
+        "likeness": likeness.detail_value(model, c, m),
         "creator": {k: v for k, v in c.items() if k not in drop},
         "match": m,
         # The same person on other platforms, when one profile links to the other.
@@ -824,6 +835,13 @@ PART_NAMES = {"content": "content", "audience": "audience", "market": "market", 
 
 
 _found_by_search = found_by_search
+
+
+@app.get("/api/companies/{company_id}/partner-profile")
+async def partner_profile(company_id: str):
+    """What the past partners Scout found have in common: platforms, games, markets, size, rhythm."""
+    company = _company(company_id)
+    return likeness.profile(company, store.creators, store.matches.get(company_id, {}))
 
 
 @app.get("/api/companies/{company_id}/recall")
