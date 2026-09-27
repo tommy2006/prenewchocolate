@@ -6,6 +6,8 @@ so rows can be pasted straight into it. Scout's extra details (contacts, links, 
 import csv
 import io
 import re
+import unicodedata
+import urllib.parse
 
 from . import likeness, linking, partners
 from .markets import MARKETS, PLATFORMS
@@ -22,7 +24,8 @@ EXTRA_COLUMNS = [
     ("Other links", 40), ("Match score", 9), ("Fit", 7), ("Audience quality", 9), ("Like your partners", 10), ("Most like", 24), ("Confidence", 11),
     ("Authenticity", 10), ("Est. price per post (EUR)", 14), ("Views counted over", 20), ("Views trend", 10),
     ("Engagement vs typical", 12), ("Last post (days ago)", 10), ("Risks / red flags", 44),
-    ("Why they fit", 60), ("Verdict", 60), ("Summary", 60), ("Collaboration idea", 50), ("Message subject", 32),
+    ("Why they fit", 60), ("Verdict", 60), ("Summary", 60), ("Collaboration idea", 50), ("Discount code", 14),
+    ("Tracking link", 44), ("Message subject", 32),
     ("First message", 80), ("Short DM", 50), ("Status", 11), ("Past collaborations", 22),
 ]
 WRAP_COLS = {"First message", "Short DM", "Collaboration idea", "Why they fit", "Verdict", "Summary", "Risks / red flags"}
@@ -68,6 +71,9 @@ ABOUT = [
     ("First message / Short DM", "Drafted by the AI in the creator's own language (Draft messages on the Shortlist). "
                                  "The short DM fits an Instagram or TikTok inbox. Read them before sending."),
     ("Collaboration idea", "One concrete idea that fits this creator's format, from the deep evaluation or the drafted message."),
+    ("Discount code / Tracking link", "A code and a link with UTM tags per creator, so every sale and visit can be traced back to "
+                                      "them. Create the code in your shop and pick the discount; the link uses the website in Brand "
+                                      "profile (without one, only the UTM part is given, to add to any page of yours)."),
     ("Like your partners / Most like", "0-100: how much this creator is like the past partners Scout found from your tracker "
                                        "(games or niche, market, platform, size, views, rhythm), and the closest ones. "
                                        "Separate from Fit: it says you've worked with creators like this before."),
@@ -183,9 +189,34 @@ def _row(primary: dict, m: dict, profs: dict[str, dict], partner: dict | None, e
         "Message subject": pitch.get("subject") or "",
         "First message": pitch.get("message") or "",
         "Short DM": pitch.get("dm") or "",
+        "Discount code": "",
+        "Tracking link": "",
         "Status": m.get("status") or "",
         "Past collaborations": ", ".join(weeks) or ("yes" if partner else ""),
     }
+
+
+def _code(c: dict, taken: set[str]) -> str:
+    """"KAKKUH", "JYKSEDI": short, typeable, unique within the download."""
+    raw = (c.get("handle") or "").lstrip("@") or c.get("name") or ""
+    plain = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", raw))  # "𝙊𝙨𝙨𝙞" -> "Ossi", "ä" -> "a"
+    base = re.sub(r"[^A-Z0-9]", "", plain.upper())[:10] or "CREATOR"
+    code, n = base, 2
+    while code in taken:
+        code, n = f"{base[:9]}{n}", n + 1
+    taken.add(code)
+    return code
+
+
+def _tracking(company: dict, c: dict, code: str) -> str:
+    tags = urllib.parse.urlencode({"utm_source": c["platform"], "utm_medium": "influencer",
+                                   "utm_campaign": re.sub(r"[^a-z0-9]+", "-", (company.get("name") or "scout").lower()).strip("-") + "-creators",
+                                   "utm_content": code.lower()})
+    site = ((company.get("profile") or {}).get("website") or "").strip()
+    if not site:
+        return "?" + tags
+    site = site if site.startswith("http") else "https://" + site
+    return site + ("&" if "?" in site else "?") + tags
 
 
 def build_rows(company: dict, rows: list[tuple[dict, dict]], creators: dict[str, dict],
@@ -195,7 +226,7 @@ def build_rows(company: dict, rows: list[tuple[dict, dict]], creators: dict[str,
     ranked = set(matches)
     idx = partners.index(company)
     model = likeness.Model(company, creators, matches)
-    seen, out = set(), []
+    seen, out, codes = set(), [], set()
     for c, m in rows:
         ids = group.get(c["id"], [c["id"]])
         person = min(ids)
@@ -206,7 +237,10 @@ def build_rows(company: dict, rows: list[tuple[dict, dict]], creators: dict[str,
         profs[c["platform"]] = c
         extra = [matches[i] for i in ids if i != c["id"] and i in matches]
         partner = next((p for p in (partners.find(idx, prof, m) for prof in profs.values()) if p), None)
-        out.append(_row(c, m, profs, partner, extra, likeness.card_value(model, c, m)))
+        row = _row(c, m, profs, partner, extra, likeness.card_value(model, c, m))
+        row["Discount code"] = _code(c, codes)
+        row["Tracking link"] = _tracking(company, c, row["Discount code"])
+        out.append(row)
     return out
 
 
